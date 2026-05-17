@@ -359,16 +359,40 @@ input.display:focus {
   align-items: stretch;
   min-width: 0;
 }
-.fx-title {
-  display: flex; align-items: center;
-  font-size: clamp(9px, 1.2vw, 11px);
-  letter-spacing: .18em;
+.fill-btn {
+  display: flex; align-items: center; justify-content: center;
+  font-family: inherit;
+  font-size: clamp(10px, 1.3vw, 13px);
+  letter-spacing: .14em;
   font-weight: 900;
-  color: var(--accent-red);
-  border-right: 1px solid var(--ink);
-  padding-right: 8px;
   text-transform: uppercase;
   line-height: 1.05;
+  color: var(--accent-white);
+  background: linear-gradient(180deg, #e85b54 0%, var(--accent-red) 60%, #8c1f1b 100%);
+  border: 1px solid var(--ink);
+  border-radius: 6px;
+  padding: 0 12px;
+  min-width: 60px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  text-shadow: 0 1px 0 rgba(0,0,0,.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.35),
+    inset 0 -2px 0 rgba(0,0,0,.30),
+    0 1px 0 rgba(0,0,0,.30);
+  transition: transform 30ms ease-out, box-shadow 30ms ease-out;
+}
+.fill-btn.holding {
+  background: linear-gradient(180deg, #ffb066 0%, var(--accent-orange) 60%, #a85e10 100%);
+  color: var(--display-bg);
+  text-shadow: none;
+  box-shadow:
+    inset 0 2px 4px rgba(0,0,0,.35),
+    inset 0 -1px 0 rgba(255,255,255,.25),
+    0 0 14px rgba(255,138,31,.7);
+  transform: translateY(1px);
 }
 .fx-grid {
   display: grid;
@@ -514,84 +538,147 @@ input.display:focus {
   letter-spacing: .3em;
 }
 
-/* ===== Options overlay ===== */
+/* ===== Options overlay — neutral system modal =====
+   Intentionally NOT in the 808 cream/red language so the same screen
+   harmonises with the 303 silver/orange and a future MS-20-style black
+   panel. Dark surface, restrained accent, sans-serif typography. */
 .options-overlay {
   position: fixed; inset: 0;
-  background: rgba(20,12,5,.7);
+  background: rgba(0,0,0,.62);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
   z-index: 990;
   display: flex; align-items: center; justify-content: center;
   padding: 16px;
+  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  color: #e8e8ea;
 }
 .options-overlay.hidden { display: none; }
 .options-card {
-  background:
-    radial-gradient(800px 400px at 30% 0%, rgba(255,255,255,.18), transparent 60%),
-    var(--bg-panel);
-  border: 2px solid var(--ink);
-  border-radius: 8px;
-  padding: 12px 18px 14px;
+  background: #1c1c20;
+  border: 1px solid #3a3a40;
+  border-radius: 10px;
+  padding: 14px 18px 16px;
   min-width: min(560px, 92vw);
-  max-width: 720px;
+  max-width: 680px;
   max-height: 92vh;
   overflow: auto;
-  box-shadow: 0 8px 24px rgba(0,0,0,.5);
-  color: var(--ink);
+  box-shadow: 0 12px 40px rgba(0,0,0,.55);
+  color: inherit;
 }
 .opt-head {
   display: flex; justify-content: space-between; align-items: center;
-  border-bottom: 1px solid var(--ink);
-  padding-bottom: 6px; margin-bottom: 8px;
+  border-bottom: 1px solid #2a2a30;
+  padding-bottom: 10px; margin-bottom: 12px;
 }
 .opt-title {
-  font-weight: 900; letter-spacing: .25em; font-size: 15px;
-  color: var(--accent-red);
+  font-weight: 600; letter-spacing: .22em; font-size: 13px;
+  color: #f0f0f2;
+  text-transform: uppercase;
 }
-.opt-section { margin: 8px 0; }
+.opt-section { margin: 14px 0; }
+.opt-section:first-of-type { margin-top: 6px; }
 .opt-label {
-  font-size: 10px; letter-spacing: .15em; font-weight: 800;
-  margin-bottom: 4px; text-transform: uppercase;
+  font-size: 10px; letter-spacing: .14em; font-weight: 500;
+  margin-bottom: 8px; text-transform: uppercase;
+  color: #8c8c92;
 }
 .opt-row {
-  display: flex; gap: 5px; flex-wrap: wrap; margin-bottom: 4px;
+  display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;
 }
-.opt-row .btn {
-  flex: 1 1 auto; min-width: 52px; min-height: 32px;
+
+/* Override the 808-themed .btn / .ctrl styles inside the modal */
+.options-overlay .btn,
+.options-overlay .btn.ctrl {
+  background: #2a2a30;
+  color: #d8d8da;
+  border: 1px solid #45454c;
+  border-radius: 6px;
+  font-family: inherit;
+  font-weight: 500;
+  letter-spacing: .06em;
+  text-transform: none;
+  text-shadow: none;
+  box-shadow: none;
+  padding: 6px 12px;
+  min-height: 32px;
+  transition: background 60ms ease-out, color 60ms ease-out, transform 60ms ease-out;
 }
-.opt-row .btn.active {
-  background: linear-gradient(180deg, var(--accent-orange), #c25e10);
-  color: var(--display-bg);
-  box-shadow:
-    inset 0 0 6px rgba(0,0,0,.3),
-    inset 0 1px 0 rgba(255,255,255,.4),
-    0 0 6px rgba(255,138,31,.4);
+.options-overlay .opt-row .btn { flex: 1 1 auto; min-width: 56px; }
+.options-overlay .btn:hover  { background: #34343a; }
+.options-overlay .btn:active { background: #15151a; transform: translateY(1px); }
+.options-overlay .btn.active {
+  background: #e8e8ea;
+  color: #18181b;
+  border-color: #e8e8ea;
+  font-weight: 600;
 }
 .opt-status {
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  color: var(--display-on);
-  background: var(--display-bg);
-  padding: 2px 8px;
+  color: #c8c8d0;
+  background: #0e0e10;
+  padding: 4px 10px;
   display: inline-block;
-  border-radius: 3px;
-  margin-top: 2px;
+  border-radius: 4px;
+  margin-top: 4px;
   font-size: 12px;
-  text-shadow: 0 0 6px rgba(255,138,31,.7);
-  border: 1px solid #000;
+  border: 1px solid #2a2a30;
+  letter-spacing: .05em;
 }
 .opt-hint {
-  font-size: 10px; color: var(--ink-soft); margin-top: 2px;
-  letter-spacing: .04em; font-weight: 600;
+  font-size: 11px; color: #6c6c72; margin-top: 6px;
+  letter-spacing: .02em; font-weight: 400;
 }
 .opt-slider {
   display: grid !important;
   grid-template-columns: 44px 1fr 44px;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
-.opt-slider .lbl { text-align: right; }
+.opt-slider .lbl {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  color: #8c8c92;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+  text-align: right;
+}
 .opt-slider .lbl.rt { text-align: left; }
+/* Neutral slider (overrides the cream 808 thumb) */
+.opt-slider input[type=range] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 28px;
+  background: transparent;
+  margin: 0; cursor: pointer;
+  touch-action: pan-x;
+}
+.opt-slider input[type=range]::-webkit-slider-runnable-track {
+  height: 4px;
+  background: #2a2a30;
+  border: 1px solid #45454c;
+  border-radius: 2px;
+  box-shadow: none;
+}
+.opt-slider input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 18px; height: 18px;
+  background: #e8e8ea;
+  border: 1px solid #45454c;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,.5);
+  margin-top: -8px;
+}
+.opt-slider input[type=range]::-moz-range-track {
+  height: 4px; background: #2a2a30; border: 1px solid #45454c; border-radius: 2px;
+}
+.opt-slider input[type=range]::-moz-range-thumb {
+  width: 18px; height: 18px; background: #e8e8ea;
+  border: 1px solid #45454c; border-radius: 50%;
+}
 .opt-foot {
-  border-top: 1px solid var(--ink);
-  padding-top: 8px; margin-top: 8px;
+  border-top: 1px solid #2a2a30;
+  padding-top: 12px; margin-top: 14px;
   display: flex; justify-content: flex-end;
 }
 
@@ -656,7 +743,7 @@ input.display:focus {
 
     <!-- Master FX -->
     <footer class="fx">
-      <div class="fx-title">MASTER<br>FX</div>
+      <button class="fill-btn" id="fillBtn" aria-label="Fill-in (hold)">FILL<br>IN</button>
       <div class="fx-grid">
         <div class="slider"><div class="lbl">Drive</div> <input type="range" min="0" max="1000" value="0"    id="fxDrive"></div>
         <div class="slider"><div class="lbl">Cutoff</div><input type="range" min="0" max="1000" value="1000" id="fxCutoff"></div>
@@ -1305,11 +1392,21 @@ const SCHEDULE_AHEAD = 0.10;
 const LOOKAHEAD_MS = 25;
 const visualQueue = []; // {step, time}
 
+// Fill-in state. While `fillActive`, the scheduler still advances normal
+// step bookkeeping (so the loop position is preserved), but every
+// 16th-note slot triggers `fillStep`'s notes instead of the live step.
+let fillActive = false;
+let fillStep = 0;
+let currentAudibleStep = 0;
+
 function step16Duration() { return (60 / bpm) / 4; }
 
 function scheduleStep(step, time) {
+  // While fill is held, sound comes from the frozen step; the LED still
+  // tracks the real step so the user sees where playback will resume.
+  const sourceStep = fillActive ? fillStep : step;
   for (let v = 0; v < N_VOICES; v++) {
-    const state = pattern[pIdx(v, step)];
+    const state = pattern[pIdx(v, sourceStep)];
     if (state === 0) continue;
     if (!isAudible(v)) continue;
     voices[v](time, state === 2);
@@ -1332,15 +1429,52 @@ function play() {
   if (isPlaying) return;
   isPlaying = true;
   currentStep = 0;
+  currentAudibleStep = 0;
   nextNoteTime = ctx.currentTime + 0.05;
   schedTimer = setInterval(scheduler, LOOKAHEAD_MS);
   document.getElementById('playBtn').classList.add('active');
+}
+
+function setFillActive(on) {
+  if (on && !fillActive) {
+    // Latch the step the user is hearing right now. Audio scheduled in the
+    // last ~100ms of lookahead will still play the original notes; from
+    // then on the scheduler triggers fillStep at the 16th-note rate.
+    fillStep = currentAudibleStep;
+  }
+  fillActive = !!on;
+  const btn = document.getElementById('fillBtn');
+  if (btn) btn.classList.toggle('holding', fillActive);
+}
+
+function bindFillButton() {
+  const btn = document.getElementById('fillBtn');
+  if (!btn) return;
+  const press = async (e) => {
+    if (e) e.preventDefault();
+    await ensureAudio();
+    setFillActive(true);
+  };
+  const release = (e) => {
+    if (e) e.preventDefault();
+    setFillActive(false);
+  };
+  btn.addEventListener('touchstart',  press,   { passive: false });
+  btn.addEventListener('touchend',    release, { passive: false });
+  btn.addEventListener('touchcancel', release);
+  btn.addEventListener('mousedown',   press);
+  btn.addEventListener('mouseup',     release);
+  btn.addEventListener('mouseleave',  release);
+  // Safety: if the page loses focus while held, release.
+  window.addEventListener('blur', release);
 }
 function stop() {
   if (!isPlaying) return;
   isPlaying = false;
   clearInterval(schedTimer); schedTimer = null;
   visualQueue.length = 0;
+  // Drop fill if the user kept it held while stopping.
+  setFillActive(false);
   document.getElementById('playBtn').classList.remove('active');
   // clear current-step UI
   for (let i = 0; i < N_STEPS; i++) {
@@ -1525,6 +1659,7 @@ function bindTransport() {
   document.getElementById('stopBtn').addEventListener('click', stop);
   document.getElementById('clearBtn').addEventListener('click', clearAllNotes);
   document.getElementById('optBtn').addEventListener('click', showOptions);
+  bindFillButton();
   document.getElementById('bpmUp').addEventListener('click', () => setBPM(bpm + 1));
   document.getElementById('bpmDown').addEventListener('click', () => setBPM(bpm - 1));
   const bpmEl = document.getElementById('bpmDisplay');
@@ -1590,6 +1725,7 @@ function renderLoop() {
     const now = ctx.currentTime;
     while (visualQueue.length > 0 && visualQueue[0].time <= now) {
       const { step } = visualQueue.shift();
+      currentAudibleStep = step;
       for (let i = 0; i < N_STEPS; i++) {
         leds[i].classList.toggle('on', i === step);
       }
