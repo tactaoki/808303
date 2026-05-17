@@ -778,7 +778,11 @@ input.display:focus {
   60%  { filter: brightness(1.15); }
   100% { filter: brightness(1.00); }
 }
-.ack-flash { animation: ackTap 180ms ease-out; }
+/* Two identical animation classes so we can re-trigger the flash on
+   rapid taps without forcing a layout reflow (`void offsetWidth` used
+   to stall the main thread 5–50 ms per tap on mobile). */
+.ack-flash-a { animation: ackTap 180ms ease-out; }
+.ack-flash-b { animation: ackTap 180ms ease-out; }
 
 /* ===== 303 grid (bass synth, monosynth, column-exclusive) ===== */
 .grid-303 {
@@ -2800,9 +2804,17 @@ const ACK_SELECTOR =
   '.fx-reset, input[type=range], input.display';
 
 function ackTap(el) {
-  el.classList.remove('ack-flash');
-  void el.offsetWidth;   // force reflow so the animation restarts on rapid taps
-  el.classList.add('ack-flash');
+  // Alternate between two identical animation classes. Swapping the class
+  // name retriggers the animation without forcing a layout reflow — the
+  // previous `void el.offsetWidth` trick stalled the main thread up to
+  // 50 ms per tap on mobile.
+  if (el.classList.contains('ack-flash-a')) {
+    el.classList.remove('ack-flash-a');
+    el.classList.add('ack-flash-b');
+  } else {
+    el.classList.remove('ack-flash-b');
+    el.classList.add('ack-flash-a');
+  }
   if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
 }
 
@@ -2813,7 +2825,10 @@ function bindAckFeedback() {
     ackTap(t);
   }, { passive: true });
   document.addEventListener('animationend', (e) => {
-    if (e.animationName === 'ackTap') e.target.classList.remove('ack-flash');
+    if (e.animationName === 'ackTap') {
+      e.target.classList.remove('ack-flash-a');
+      e.target.classList.remove('ack-flash-b');
+    }
   });
 }
 
