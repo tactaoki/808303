@@ -969,8 +969,8 @@ input.display:focus {
       </div>
       <div class="opt-label" style="margin-top:8px">BASS · WAVE</div>
       <div class="opt-row">
+        <button class="btn ctrl" data-bass-wave="sawtooth">Sawtooth</button>
         <button class="btn ctrl" data-bass-wave="square">Square</button>
-        <button class="btn ctrl" data-bass-wave="triangle">Triangle</button>
       </div>
     </section>
 
@@ -1141,13 +1141,20 @@ function makeBalanceChannel(ctx, dest, boostDb) {
    soft safety limiter that only catches genuine overshoot. */
 function makeBassChannel(ctx, dest) {
   const input = ctx.createGain();
+  // Mimic the real 303's signal chain — multiple HPF stages between filter
+  // and amp lose the deep bass and give the synth its characteristic
+  // bass-light, squelchy quality. Gentle Butterworth roll-off at 80 Hz.
+  const hp = ctx.createBiquadFilter();
+  hp.type = 'highpass';
+  hp.frequency.value = 80;
+  hp.Q.value = 0.5;
   const lim = ctx.createDynamicsCompressor();
   lim.threshold.value = -1;
-  lim.knee.value      = 6;     // soft knee preserves transient ring
-  lim.ratio.value     = 4;     // gentle slope
-  lim.attack.value    = 0.010; // slow enough to let resonance peaks through
+  lim.knee.value      = 6;
+  lim.ratio.value     = 4;
+  lim.attack.value    = 0.010;
   lim.release.value   = 0.12;
-  input.connect(lim).connect(dest);
+  input.connect(hp).connect(lim).connect(dest);
   return input;
 }
 
@@ -1184,6 +1191,7 @@ async function ensureAudio() {
       bass: makeBassChannel(ctx, master.input),
     };
     voices = createVoices(ctx, trackChannels);
+    BASS_DRIVE_CURVE = makeBassDriveCurve();
     master.setReso(options.resonance);
     master.setDelayTime(delaySecondsFromOptions(bpm));
     window.__rhythmMachine = { ctx, master, voices };
@@ -1627,7 +1635,7 @@ const DEFAULTS = {
   // Bass synth (303 view)
   bassKey: 'A',
   bassMode: 'minor',
-  bassWave: 'square',
+  bassWave: 'sawtooth',     // sawtooth is the iconic 303 voice
 };
 const options = { ...DEFAULTS };
 
@@ -1742,9 +1750,23 @@ function step16Duration() { return (60 / bpm) / 4; }
    optionally bumping the filter on accent. The amp release / oscillator
    shutdown only happen at the end of the phrase. */
 
-let live303 = null;          // { osc, filt, amp, endTime } while a phrase is sustaining
+let live303 = null;          // { osc, shaper, filt, tail?, cutoffParam, amp, endTime }
 const AMP_PEAK   = 0.55;
 const AMP_PEAK_A = 0.85;     // accent peak
+const SLIDE_SEC  = 0.060;    // real-303 slide time, BPM-independent
+
+// Pre-baked tanh curve for the per-voice input saturation (built once
+// inside ensureAudio after ctx is up).
+let BASS_DRIVE_CURVE = null;
+function makeBassDriveCurve() {
+  const N = 2049;
+  const c = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const x = (i / (N - 1)) * 2 - 1;
+    c[i] = Math.tanh(1.5 * x);
+  }
+  return c;
+}
 
 function findActiveRow303(step) {
   for (let r = 0; r < N_ROWS_303; r++) {
@@ -1753,23 +1775,92 @@ function findActiveRow303(step) {
   return -1;
 }
 
+/* Build the per-phrase filter. When AudioWorklet is available we use the
+   same 4-pole non-linear ladder processor as the master bus — giving a
+   proper 24 dB/oct response with built-in tanh feedback (so it never
+   self-oscillates audibly at the resonance values we use). Fallback is
+   two cascaded BiquadFilter LPs sharing the same cutoff envelope. */
+function build303Filter(ctx, isAccent) {
+  if (workletReady) {
+    const f = new AudioWorkletNode(ctx, 'ladder', {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+    });
+    // Resonance: 0.75 / 0.95 stay below the worklet's k=4 self-osc edge,
+    // squelchy but never a continuous pitched tone. Drive adds 303 grit.
+    f.parameters.get('resonance').setValueAtTime(isAccent ? 0.95 : 0.75, ctx.currentTime);
+    f.parameters.get('drive').setValueAtTime(0.30, ctx.currentTime);
+    return { node: f, tail: null, cutoffParam: f.parameters.get('cutoff') };
+  }
+  // Fallback: 2 biquads in series for 24 dB/oct, both Q capped to avoid
+  // self-oscillation. We expose a cutoff "proxy" that writes the same
+  // automation to both stages.
+  const a = ctx.createBiquadFilter(); a.type = 'lowpass';
+  const b = ctx.createBiquadFilter(); b.type = 'lowpass';
+  a.Q.value = isAccent ? 8 : 5;
+  b.Q.value = 0.707;
+  a.connect(b);
+  const proxy = {
+    cancelScheduledValues(t) { a.frequency.cancelScheduledValues(t); b.frequency.cancelScheduledValues(t); },
+    setValueAtTime(v, t)     { a.frequency.setValueAtTime(v, t);     b.frequency.setValueAtTime(v, t); },
+    linearRampToValueAtTime(v, t)      { a.frequency.linearRampToValueAtTime(v, t);      b.frequency.linearRampToValueAtTime(v, t); },
+    exponentialRampToValueAtTime(v, t) { a.frequency.exponentialRampToValueAtTime(v, t); b.frequency.exponentialRampToValueAtTime(v, t); },
+    get value() { return a.frequency.value; },
+  };
+  return { node: a, tail: b, cutoffParam: proxy };
+}
+
+/* Fixed-time, tempo-independent VCF envelope. Accent gets a brighter peak
+   AND a faster decay (matches the real 303's fixed 200ms accent decay). */
+function fireFilterEnv(cutoffParam, time, isAccent) {
+  const peak  = isAccent ? 6500 : 3000;
+  const atk   = isAccent ? 0.006 : 0.008;
+  const decay = isAccent ? 0.180 : 0.280;
+  try {
+    cutoffParam.cancelScheduledValues(time);
+    cutoffParam.setValueAtTime(80, time);
+    cutoffParam.linearRampToValueAtTime(peak, time + atk);
+    cutoffParam.exponentialRampToValueAtTime(80, time + atk + decay);
+  } catch (_) {}
+}
+
+function disconnectVoice303(v) {
+  if (!v) return;
+  try { v.osc.disconnect(); } catch (_) {}
+  try { v.shaper.disconnect(); } catch (_) {}
+  try { v.filt.disconnect(); } catch (_) {}
+  if (v.tail) { try { v.tail.disconnect(); } catch (_) {} }
+  try { v.amp.disconnect(); } catch (_) {}
+}
+
+function scheduleVoice303Release(v, releaseAt) {
+  try {
+    const curG = v.amp.gain.value;
+    v.amp.gain.cancelScheduledValues(releaseAt - 0.005);
+    v.amp.gain.setValueAtTime(curG, Math.max(releaseAt - 0.005, ctx.currentTime));
+    v.amp.gain.linearRampToValueAtTime(0, releaseAt);
+  } catch (_) {}
+  // Schedule cleanup a bit after the release completes.
+  const delayMs = Math.max(0, (releaseAt - ctx.currentTime) * 1000) + 80;
+  setTimeout(() => disconnectVoice303(v), delayMs);
+}
+
 function release303(time, releaseLen) {
   if (!live303) return;
   const v = live303;
-  const curG = v.amp.gain.value;
   try {
+    const curG = v.amp.gain.value;
     v.amp.gain.cancelScheduledValues(time);
     v.amp.gain.setValueAtTime(curG, time);
     v.amp.gain.linearRampToValueAtTime(0, time + releaseLen);
   } catch (_) {}
+  const delayMs = Math.max(0, (time + releaseLen - ctx.currentTime) * 1000) + 80;
+  setTimeout(() => disconnectVoice303(v), delayMs);
   live303 = null;
 }
 
 function schedule303(sourceStep, realStep, time) {
   const thisRow = findActiveRow303(sourceStep);
   if (thisRow < 0) {
-    // No note this step. If a voice was kept alive expecting legato but the
-    // user (in immediate mode) removed the next note, release it gracefully.
     if (live303) release303(time, 0.01);
     return;
   }
@@ -1778,108 +1869,87 @@ function schedule303(sourceStep, realStep, time) {
   const thisPitch = row303Pitch(thisRow);
   const stepDur   = step16Duration();
 
-  // Previous-step continuation: ONLY when not in fill (fill is discrete).
   let prevRow = -1, nextRow = -1;
   if (!fillActive) {
-    const ps = (realStep + N_STEPS - 1) % N_STEPS;
-    prevRow = findActiveRow303(ps);
-    const ns = (realStep + 1) % N_STEPS;
-    nextRow = findActiveRow303(ns);
+    prevRow = findActiveRow303((realStep + N_STEPS - 1) % N_STEPS);
+    nextRow = findActiveRow303((realStep + 1) % N_STEPS);
   }
   const wasContinuation = prevRow >= 0 && live303 && live303.endTime >= time - 0.001;
   const isLegatoOut     = nextRow >= 0;
 
   if (wasContinuation) {
     const v = live303;
-    // Optional accent bump inside a slide: re-open the filter momentarily
-    // without touching the amp envelope. Gives accented notes character
-    // even when they're part of a tied phrase.
-    if (isAccent) {
-      try {
-        const curF = v.filt.frequency.value;
-        v.filt.frequency.cancelScheduledValues(time);
-        v.filt.frequency.setValueAtTime(curF, time);
-        v.filt.frequency.linearRampToValueAtTime(11000, time + 0.005);
-        v.filt.frequency.exponentialRampToValueAtTime(80, time + Math.max(stepDur * 1.2, 0.18));
-      } catch (_) {}
-    }
-    // Schedule slide toward the next note's pitch at end of THIS step.
+    // Real 303 only retriggers the filter envelope on accent within a slide
+    // phrase. Non-accent slide steps inherit the still-decaying sweep.
+    if (isAccent) fireFilterEnv(v.cutoffParam, time, true);
+    // Slide starts at THIS step's onset and lasts a fixed 60ms — independent
+    // of tempo, matching the real 303's slide circuit time constant.
     if (isLegatoOut && nextRow !== thisRow) {
-      const nextPitch = row303Pitch(nextRow);
-      if (nextPitch !== thisPitch) {
+      const np = row303Pitch(nextRow);
+      if (np !== thisPitch) {
         try {
-          v.osc.frequency.exponentialRampToValueAtTime(
-            nextPitch, time + stepDur - 0.005);
+          const f = v.osc.frequency;
+          f.cancelScheduledValues(time);
+          f.setValueAtTime(f.value, time);
+          f.exponentialRampToValueAtTime(np, time + SLIDE_SEC);
         } catch (_) {}
       }
     }
     if (isLegatoOut) {
-      // Keep voice alive, just extend our bookkeeping
       v.endTime = time + stepDur + 0.002;
     } else {
-      // Last step of the phrase: schedule release at the end of this step's
-      // gate (0.6 of a 16th). The single sustained note finally ends.
-      const releaseAt = time + stepDur * 0.6;
-      try {
-        const curG = v.amp.gain.value;
-        v.amp.gain.cancelScheduledValues(time);
-        v.amp.gain.setValueAtTime(curG, time);
-        v.amp.gain.setValueAtTime(curG, releaseAt - 0.005);
-        v.amp.gain.linearRampToValueAtTime(0, releaseAt);
-      } catch (_) {}
+      scheduleVoice303Release(v, time + stepDur * 0.6);
       live303 = null;
     }
     return;
   }
 
-  // Brand-new phrase. Snap-release any leftover voice (defensive).
+  // Brand-new phrase: snap-release any leftover voice first.
   if (live303) release303(time, 0.005);
 
-  // Fresh voice
-  const osc  = ctx.createOscillator();
-  osc.type = options.bassWave === 'triangle' ? 'triangle' : 'square';
+  // ---- Build a fresh voice chain ----
+  const osc = ctx.createOscillator();
+  osc.type = options.bassWave === 'square' ? 'square' : 'sawtooth';
   osc.frequency.setValueAtTime(thisPitch, time);
+  // Fresh-phrase outgoing slide: if there's a next note at a different pitch,
+  // schedule the slide to BEGIN at the next step's onset, last 60ms.
   if (isLegatoOut && nextRow !== thisRow) {
-    const nextPitch = row303Pitch(nextRow);
-    if (nextPitch !== thisPitch) {
-      osc.frequency.exponentialRampToValueAtTime(nextPitch, time + stepDur - 0.005);
+    const np = row303Pitch(nextRow);
+    if (np !== thisPitch) {
+      osc.frequency.setValueAtTime(thisPitch, time + stepDur);
+      osc.frequency.exponentialRampToValueAtTime(np, time + stepDur + SLIDE_SEC);
     }
   }
 
-  const filt = ctx.createBiquadFilter();
-  filt.type = 'lowpass';
-  filt.Q.value = isAccent ? 28 : 16;
-  // Wide low → high → low sweep, snappy decay = the acid "pyaow" squelch.
-  filt.frequency.setValueAtTime(80, time);
-  filt.frequency.linearRampToValueAtTime(isAccent ? 11000 : 5500, time + 0.005);
-  // Filter env decay independent of step length — stays snappy at any tempo,
-  // capped by the gate so it can keep coasting through tied steps.
-  filt.frequency.exponentialRampToValueAtTime(80, time + Math.max(stepDur * 1.2, 0.18));
+  const shaper = ctx.createWaveShaper();
+  shaper.curve = BASS_DRIVE_CURVE;
+  shaper.oversample = '2x';
 
+  const fb  = build303Filter(ctx, isAccent);
   const amp = ctx.createGain();
-  // Triangle has less harmonic content than square so it sounds quieter at
-  // the same gain; bump it +4.5 dB (~1.68x) to even the two waveforms out.
-  const waveBoost = options.bassWave === 'triangle' ? 1.6788 : 1.0;
-  const peak = (isAccent ? AMP_PEAK_A : AMP_PEAK) * waveBoost;
+  const peak = isAccent ? AMP_PEAK_A : AMP_PEAK;
   amp.gain.setValueAtTime(0, time);
-  amp.gain.linearRampToValueAtTime(peak, time + 0.002);
-  // No release scheduled yet — release is set when the phrase actually ends.
+  amp.gain.linearRampToValueAtTime(peak, time + 0.003);
 
-  osc.connect(filt).connect(amp).connect(trackChannels ? trackChannels.bass : master.input);
+  osc.connect(shaper).connect(fb.node);
+  (fb.tail || fb.node).connect(amp);
+  amp.connect(trackChannels ? trackChannels.bass : master.input);
+
+  fireFilterEnv(fb.cutoffParam, time, isAccent);
+
   osc.start(time);
-  // Safety stop far in the future. Web Audio's osc.stop() can only be set
-  // once (re-calling is a no-op); the audible end is controlled by the amp
-  // envelope, so 2 minutes is plenty even for long sustained jam phrases.
-  osc.stop(time + 120);
+  osc.stop(time + 120);   // safety stop; audible end is the amp envelope
+
+  const voice = {
+    osc, shaper, filt: fb.node, tail: fb.tail,
+    cutoffParam: fb.cutoffParam, amp,
+    endTime: time + stepDur + 0.002,
+  };
 
   if (isLegatoOut) {
-    // Phrase continues; keep voice live for the next scheduleStep call.
-    live303 = { osc, filt, amp, endTime: time + stepDur + 0.002 };
+    live303 = voice;
   } else {
-    // Single-note phrase: schedule release right away.
-    const releaseAt = time + stepDur * 0.6;
-    amp.gain.setValueAtTime(peak, releaseAt - 0.005);
-    amp.gain.linearRampToValueAtTime(0, releaseAt);
+    scheduleVoice303Release(voice, time + stepDur * 0.6);
     live303 = null;
   }
 }
