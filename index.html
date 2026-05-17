@@ -1135,6 +1135,22 @@ function makeBalanceChannel(ctx, dest, boostDb) {
   return input;   // voice nodes connect to the input gain
 }
 
+/* Bass channel: a much gentler dynamics path than the drums. Aggressive
+   limiting would squash the very resonance peaks that make the 303
+   "pyaow" — so we skip the leveling compressor entirely and use a slow,
+   soft safety limiter that only catches genuine overshoot. */
+function makeBassChannel(ctx, dest) {
+  const input = ctx.createGain();
+  const lim = ctx.createDynamicsCompressor();
+  lim.threshold.value = -1;
+  lim.knee.value      = 6;     // soft knee preserves transient ring
+  lim.ratio.value     = 4;     // gentle slope
+  lim.attack.value    = 0.010; // slow enough to let resonance peaks through
+  lim.release.value   = 0.12;
+  input.connect(lim).connect(dest);
+  return input;
+}
+
 async function ensureAudio() {
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -1165,7 +1181,7 @@ async function ensureAudio() {
       cp:   makeBalanceChannel(ctx, master.input),
       cb:   makeBalanceChannel(ctx, master.input),
       cy:   makeBalanceChannel(ctx, master.input),
-      bass: makeBalanceChannel(ctx, master.input),
+      bass: makeBassChannel(ctx, master.input),
     };
     voices = createVoices(ctx, trackChannels);
     master.setReso(options.resonance);
@@ -1783,8 +1799,8 @@ function schedule303(sourceStep, realStep, time) {
         const curF = v.filt.frequency.value;
         v.filt.frequency.cancelScheduledValues(time);
         v.filt.frequency.setValueAtTime(curF, time);
-        v.filt.frequency.linearRampToValueAtTime(8500, time + 0.005);
-        v.filt.frequency.exponentialRampToValueAtTime(150, time + stepDur * 1.5);
+        v.filt.frequency.linearRampToValueAtTime(11000, time + 0.005);
+        v.filt.frequency.exponentialRampToValueAtTime(80, time + Math.max(stepDur * 1.2, 0.18));
       } catch (_) {}
     }
     // Schedule slide toward the next note's pitch at end of THIS step.
@@ -1832,11 +1848,13 @@ function schedule303(sourceStep, realStep, time) {
 
   const filt = ctx.createBiquadFilter();
   filt.type = 'lowpass';
-  filt.Q.value = isAccent ? 14 : 9;
-  filt.frequency.setValueAtTime(150, time);
-  filt.frequency.linearRampToValueAtTime(isAccent ? 8500 : 4500, time + 0.005);
-  // Long decay so the filter envelope keeps coasting through tied steps.
-  filt.frequency.exponentialRampToValueAtTime(150, time + Math.max(stepDur * 1.5, 0.06));
+  filt.Q.value = isAccent ? 28 : 16;
+  // Wide low → high → low sweep, snappy decay = the acid "pyaow" squelch.
+  filt.frequency.setValueAtTime(80, time);
+  filt.frequency.linearRampToValueAtTime(isAccent ? 11000 : 5500, time + 0.005);
+  // Filter env decay independent of step length — stays snappy at any tempo,
+  // capped by the gate so it can keep coasting through tied steps.
+  filt.frequency.exponentialRampToValueAtTime(80, time + Math.max(stepDur * 1.2, 0.18));
 
   const amp = ctx.createGain();
   // Triangle has less harmonic content than square so it sounds quieter at
