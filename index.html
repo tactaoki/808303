@@ -329,8 +329,12 @@ input.display:focus {
     0 0 10px rgba(232,90,80,.5);
 }
 .cell.cur::after {
-  content: ""; position: absolute; inset: -3px; border-radius: 6px;
-  border: 1px solid rgba(255,255,255,.7);
+  content: ""; position: absolute; inset: -2px; border-radius: 6px;
+  border: 2px solid rgba(255,255,255,.95);
+  box-shadow:
+    0 0 10px rgba(255,255,255,.55),
+    0 0 4px rgba(255,220,170,.65),
+    inset 0 0 6px rgba(255,255,255,.25);
   pointer-events: none;
 }
 /* TR-808 style 4-step group color bands (subtle tint on off-cells) */
@@ -798,7 +802,7 @@ input.display:focus {
       <div class="opt-label">FILTER RESONANCE</div>
       <div class="slider opt-slider">
         <div class="lbl">Mild</div>
-        <input type="range" min="0" max="1000" value="608" id="optReso">
+        <input type="range" min="0" max="1000" value="500" id="optReso">
         <div class="lbl rt">Wild</div>
       </div>
     </section>
@@ -806,8 +810,8 @@ input.display:focus {
     <section class="opt-section">
       <div class="opt-label">EDIT TIMING</div>
       <div class="opt-row">
-        <button class="btn ctrl active" id="snapOff">Immediate</button>
-        <button class="btn ctrl"        id="snapOn">Snap to loop start</button>
+        <button class="btn ctrl"        id="snapOff">Immediate</button>
+        <button class="btn ctrl active" id="snapOn">Snap to loop start</button>
       </div>
       <div class="opt-hint">When "Snap" is on, note &amp; M/S edits apply at the next bar.</div>
     </section>
@@ -1340,7 +1344,7 @@ const pendingSoloed  = new Array(N_VOICES).fill(false);
 let hasPending = false;
 
 /* ----- Options (driven by the Options overlay) ----- */
-const DEFAULTS = { delayDenom: 8, delayDotted: true, resonance: 0.608, snapEdits: false };
+const DEFAULTS = { delayDenom: 8, delayDotted: true, resonance: 0.5, snapEdits: true };
 const options = { ...DEFAULTS };
 
 function delaySecondsFromOptions(bpmVal) {
@@ -1441,9 +1445,35 @@ function play() {
   isPlaying = true;
   currentStep = 0;
   currentAudibleStep = 0;
+  lastColStep = -1;
   nextNoteTime = ctx.currentTime + 0.05;
   schedTimer = setInterval(scheduler, LOOKAHEAD_MS);
   document.getElementById('playBtn').classList.add('active');
+}
+
+// Tempo +/- long-press: one immediate step on press, then after a short
+// delay it auto-repeats with an accelerating interval so the user can
+// scrub from 40 → 240 BPM in a couple of seconds without lifting.
+function setupBpmRepeat(btn, delta) {
+  if (!btn) return;
+  let timer = null;
+  const stop = () => { if (timer) { clearTimeout(timer); timer = null; } };
+  const start = (e) => {
+    if (e) e.preventDefault();
+    setBPM(bpm + delta);
+    let interval = 90;
+    const tick = () => {
+      setBPM(bpm + delta);
+      interval = Math.max(28, interval * 0.92);
+      timer = setTimeout(tick, interval);
+    };
+    timer = setTimeout(tick, 380);
+  };
+  btn.addEventListener('pointerdown',  start);
+  btn.addEventListener('pointerup',    stop);
+  btn.addEventListener('pointerleave', stop);
+  btn.addEventListener('pointercancel',stop);
+  window.addEventListener('blur', stop);
 }
 
 function setFillActive(on) {
@@ -1492,6 +1522,7 @@ function stop() {
     leds[i].classList.remove('on');
     for (let v = 0; v < N_VOICES; v++) cells[v][i].classList.remove('cur');
   }
+  lastColStep = -1;
 }
 
 /* ====================================================================
@@ -1671,8 +1702,8 @@ function bindTransport() {
   document.getElementById('clearBtn').addEventListener('click', clearAllNotes);
   document.getElementById('optBtn').addEventListener('click', showOptions);
   bindFillButton();
-  document.getElementById('bpmUp').addEventListener('click', () => setBPM(bpm + 1));
-  document.getElementById('bpmDown').addEventListener('click', () => setBPM(bpm - 1));
+  setupBpmRepeat(document.getElementById('bpmUp'),   +1);
+  setupBpmRepeat(document.getElementById('bpmDown'), -1);
   const bpmEl = document.getElementById('bpmDisplay');
   bpmEl.addEventListener('focus', () => bpmEl.select());
   const commitBpm = () => {
@@ -1731,20 +1762,35 @@ function bindFX() {
 
 /* ---------- step LED render loop ---------- */
 
+let lastColStep = -1;   // last column highlighted by the .cur ring
+
 function renderLoop() {
   if (ctx && isPlaying) {
     const now = ctx.currentTime;
+    let ledStep = -1;
     while (visualQueue.length > 0 && visualQueue[0].time <= now) {
       const { step } = visualQueue.shift();
       currentAudibleStep = step;
+      ledStep = step;
+    }
+    // Top-right step LEDs always reflect the internal sequencer position,
+    // unaffected by fill — they're the user's "where we really are" anchor.
+    if (ledStep >= 0) {
       for (let i = 0; i < N_STEPS; i++) {
-        leds[i].classList.toggle('on', i === step);
+        leds[i].classList.toggle('on', i === ledStep);
       }
+    }
+    // Column playhead ring: freeze on fillStep while fill is held so the
+    // user sees which step is being repeated; otherwise it tracks the
+    // currently audible step.
+    const colStep = fillActive ? fillStep : currentAudibleStep;
+    if (colStep !== lastColStep) {
       for (let v = 0; v < N_VOICES; v++) {
         for (let i = 0; i < N_STEPS; i++) {
-          cells[v][i].classList.toggle('cur', i === step);
+          cells[v][i].classList.toggle('cur', i === colStep);
         }
       }
+      lastColStep = colStep;
     }
   }
   requestAnimationFrame(renderLoop);
