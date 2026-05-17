@@ -38,6 +38,7 @@ html, body {
   font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-weight: 600;
   overflow: hidden;
+  overscroll-behavior: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
@@ -334,8 +335,8 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
 /* ===== FX strip ===== */
 .fx {
   display: grid;
-  grid-template-columns: auto repeat(6, minmax(0, 1fr));
-  gap: 6px;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
   padding: 6px 8px;
   border-top: 1px solid var(--ink);
   background:
@@ -356,36 +357,40 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
   text-transform: uppercase;
   line-height: 1.05;
 }
-.slider {
-  display: flex;
-  flex-direction: column;
+.fx-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 4px 14px;
+  min-width: 0;
   align-items: center;
-  justify-content: center;
-  gap: 3px;
+}
+.slider {
+  display: grid;
+  grid-template-columns: clamp(40px, 6vw, 56px) 1fr;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
 }
-/* The vertical visual is achieved by rotating a horizontal range -90deg
-   inside a fixed-size wrapper, so the thumb is reliably centered on the
-   track in every browser. */
-.knob-wrap {
-  height: clamp(50px, 11vh, 86px);
-  width: 30px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: visible;
+.slider .lbl {
+  font-size: clamp(8px, 1.1vw, 10px);
+  letter-spacing: .08em;
+  color: var(--ink);
+  text-transform: uppercase;
+  text-align: right;
+  white-space: nowrap;
+  font-weight: 800;
 }
 .slider input[type=range] {
   -webkit-appearance: none;
   appearance: none;
-  width: clamp(50px, 11vh, 86px);
-  height: 24px;
+  width: 100%;
+  min-width: 0;
+  height: 26px;
   background: transparent;
   margin: 0;
-  transform: rotate(-90deg);
-  transform-origin: center center;
-  flex: 0 0 auto;
   cursor: pointer;
+  touch-action: pan-x;
 }
 .slider input[type=range]::-webkit-slider-runnable-track {
   height: 8px;
@@ -397,20 +402,17 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
 .slider input[type=range]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px; height: 24px;
-  /* Two layered gradients: a thin vertical red stripe (renders as horizontal
-     indicator line after the parent's -90deg rotation), on top of a cream
-     bevel. Avoids pseudo-of-pseudo which CSS doesn't support. */
+  width: 22px; height: 18px;
   background:
-    linear-gradient(90deg, transparent 0 5px, var(--accent-red) 5px 9px, transparent 9px 14px),
+    linear-gradient(180deg, transparent 0 7px, var(--accent-red) 7px 11px, transparent 11px 18px),
     linear-gradient(180deg, #f7eccb 0%, #d6c293 50%, #a99060 100%);
   border: 1px solid var(--ink);
   border-radius: 3px;
   box-shadow:
-    inset 1px 0 0 rgba(255,255,255,.7),
-    inset -1px 0 0 rgba(0,0,0,.25),
+    inset 0 1px 0 rgba(255,255,255,.7),
+    inset 0 -1px 0 rgba(0,0,0,.25),
     0 1px 2px rgba(0,0,0,.4);
-  margin-top: -9px;
+  margin-top: -6px;
 }
 .slider input[type=range]::-moz-range-track {
   height: 8px;
@@ -419,23 +421,50 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
   border-radius: 2px;
 }
 .slider input[type=range]::-moz-range-thumb {
-  width: 14px; height: 24px;
+  width: 22px; height: 18px;
   background:
-    linear-gradient(90deg, transparent 0 5px, var(--accent-red) 5px 9px, transparent 9px 14px),
+    linear-gradient(180deg, transparent 0 7px, var(--accent-red) 7px 11px, transparent 11px 18px),
     linear-gradient(180deg, #f7eccb 0%, #d6c293 50%, #a99060 100%);
   border: 1px solid var(--ink);
   border-radius: 3px;
 }
-.slider .lbl {
-  font-size: clamp(7px, 1vw, 9px);
-  letter-spacing: .08em;
+
+/* ===== Right-side page nav (placeholder for future 303 page) ===== */
+.page-nav {
+  display: flex; flex-direction: column;
+  gap: 4px;
+  border-left: 1px solid var(--ink);
+  padding-left: 8px;
+  align-self: stretch;
+  justify-content: center;
+}
+.page-btn {
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  background: linear-gradient(180deg, #efe2c2 0%, #c9b88f 100%);
   color: var(--ink);
+  padding: 4px 10px;
+  font-size: clamp(9px, 1.2vw, 11px);
+  font-weight: 900;
+  letter-spacing: .15em;
   text-transform: uppercase;
-  text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.6),
+    inset 0 -2px 0 rgba(0,0,0,.15),
+    0 1px 0 rgba(0,0,0,.25);
+}
+.page-btn.active {
+  background: linear-gradient(180deg, #e85b54 0%, #a8231e 100%);
+  color: var(--accent-white);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.4),
+    inset 0 -2px 0 rgba(0,0,0,.25),
+    0 0 8px rgba(255,90,40,.45);
+}
+.page-btn.ghost {
+  opacity: .45;
+  cursor: not-allowed;
 }
 
 /* ===== Orientation guard ===== */
@@ -519,12 +548,16 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
     <!-- Master FX -->
     <footer class="fx">
       <div class="fx-title">MASTER<br>FX</div>
-      <div class="slider"><div class="knob-wrap"><input type="range" min="0" max="1000" value="0"    id="fxDrive"></div><div class="lbl">Drive</div></div>
-      <div class="slider"><div class="knob-wrap"><input type="range" min="0" max="1000" value="1000" id="fxCutoff"></div><div class="lbl">Cutoff</div></div>
-      <div class="slider"><div class="knob-wrap"><input type="range" min="0" max="1000" value="0"    id="fxReso"></div><div class="lbl">Reso</div></div>
-      <div class="slider"><div class="knob-wrap"><input type="range" min="0" max="1000" value="0"    id="fxDlyMix"></div><div class="lbl">Dly Mix</div></div>
-      <div class="slider"><div class="knob-wrap"><input type="range" min="0" max="1000" value="400"  id="fxDlyFb"></div><div class="lbl">Dly Fb</div></div>
-      <div class="slider"><div class="knob-wrap"><input type="range" min="0" max="1000" value="0"    id="fxRev"></div><div class="lbl">Rev Mix</div></div>
+      <div class="fx-grid">
+        <div class="slider"><div class="lbl">Drive</div> <input type="range" min="0" max="1000" value="0"    id="fxDrive"></div>
+        <div class="slider"><div class="lbl">Cutoff</div><input type="range" min="0" max="1000" value="1000" id="fxCutoff"></div>
+        <div class="slider"><div class="lbl">Delay</div> <input type="range" min="0" max="1000" value="0"    id="fxDelay"></div>
+        <div class="slider"><div class="lbl">Reverb</div><input type="range" min="0" max="1000" value="0"    id="fxReverb"></div>
+      </div>
+      <nav class="page-nav">
+        <button class="page-btn active" id="page808">808</button>
+        <button class="page-btn ghost" id="page303" disabled title="Coming soon">303</button>
+      </nav>
     </footer>
   </div>
 </div>
@@ -688,7 +721,7 @@ async function ensureAudio() {
     }
     master = buildMasterBus(ctx);
     voices = createVoices(ctx, master.input);
-    master.setDelayTime((60 / bpm) / 2);
+    master.setDelayTime((60 / bpm) * 0.75);  // dotted 8th note
     window.__rhythmMachine = { ctx, master, voices };
   }
   if (ctx.state === 'suspended') await ctx.resume();
@@ -765,6 +798,21 @@ function buildMasterBus(ctx) {
   dlyRet.connect(out);
   revRet.connect(out);
 
+  // Fixed resonance: pre-self-oscillation. Worklet's k = reso*4; oscillates
+  // around k≈4.0, so 0.85 (k=3.4) gives a strong colored peak that never
+  // self-oscillates. Modest internal drive for filter coloration only.
+  const FIXED_RESO = 0.85;
+  const FIXED_FILTER_DRIVE = 0.25;
+  if (workletReady) {
+    filter.parameters.get('resonance').setValueAtTime(FIXED_RESO, ctx.currentTime);
+    filter.parameters.get('drive').setValueAtTime(FIXED_FILTER_DRIVE, ctx.currentTime);
+  } else {
+    const Q = 0.5 + FIXED_RESO * 12;
+    filter._b1.Q.value = Q;
+    filter._b2.Q.value = Q;
+    filter._ws.curve = makeTanhCurve(FIXED_FILTER_DRIVE * 0.7);
+  }
+
   // public API
   const setDrive = (v01) => {
     const v = Math.max(0, Math.min(1, v01));
@@ -783,34 +831,25 @@ function buildMasterBus(ctx) {
       filter._b2.frequency.setTargetAtTime(v, ctx.currentTime, 0.02);
     }
   };
-  const setReso = (v01) => {
+  // Combined delay knob: a single slider controls both send/mix and feedback,
+  // shaped so 0 = bypass and 1 = lush near-runaway tail without diverging.
+  const setDelay = (v01) => {
     const v = Math.max(0, Math.min(1, v01));
-    if (workletReady) {
-      filter.parameters.get('resonance').setTargetAtTime(v * 1.15, ctx.currentTime, 0.02);
-      filter.parameters.get('drive').setTargetAtTime(v * 0.6, ctx.currentTime, 0.02);
-    } else {
-      const Q = 0.5 + v * 18;
-      filter._b1.Q.setTargetAtTime(Q, ctx.currentTime, 0.02);
-      filter._b2.Q.setTargetAtTime(Q, ctx.currentTime, 0.02);
-      filter._ws.curve = makeTanhCurve(v * 0.7);
-    }
-  };
-  const setDelayMix = (v01) => {
-    dlySend.gain.setTargetAtTime(Math.max(0, Math.min(1, v01)) * 0.8, ctx.currentTime, 0.02);
-  };
-  const setDelayFB = (v01) => {
-    fb.gain.setTargetAtTime(Math.max(0, Math.min(0.92, v01 * 0.92)), ctx.currentTime, 0.02);
+    const mix = v * 0.75;          // dry/wet send
+    const feedback = v * 0.78;     // capped well below the 0.92 divergence limit
+    dlySend.gain.setTargetAtTime(mix, ctx.currentTime, 0.02);
+    fb.gain.setTargetAtTime(feedback, ctx.currentTime, 0.02);
   };
   const setDelayTime = (sec) => {
     delay.delayTime.setTargetAtTime(Math.max(0.01, Math.min(2.0, sec)), ctx.currentTime, 0.02);
   };
-  const setReverbMix = (v01) => {
+  const setReverb = (v01) => {
     revSend.gain.setTargetAtTime(Math.max(0, Math.min(1, v01)) * 0.9, ctx.currentTime, 0.02);
   };
 
   return {
     input, output: out,
-    setDrive, setCutoff, setReso, setDelayMix, setDelayFB, setDelayTime, setReverbMix
+    setDrive, setCutoff, setDelay, setDelayTime, setReverb
   };
 }
 
@@ -1212,7 +1251,7 @@ function setBPM(v) {
   bpm = Math.max(40, Math.min(240, v|0));
   document.getElementById('bpmDisplay').textContent = String(bpm);
   // BPM-synced delay (8th note)
-  if (master) master.setDelayTime((60 / bpm) / 2);
+  if (master) master.setDelayTime((60 / bpm) * 0.75);  // dotted 8th note
 }
 
 function bindTransport() {
@@ -1238,10 +1277,8 @@ const sliderVal = (el) => parseFloat(el.value) / SLIDER_MAX;
 function bindFX() {
   const drv = document.getElementById('fxDrive');
   const cut = document.getElementById('fxCutoff');
-  const res = document.getElementById('fxReso');
-  const dm  = document.getElementById('fxDlyMix');
-  const df  = document.getElementById('fxDlyFb');
-  const rv  = document.getElementById('fxRev');
+  const dly = document.getElementById('fxDelay');
+  const rev = document.getElementById('fxReverb');
 
   const applyAll = () => {
     if (!master) return;
@@ -1250,13 +1287,11 @@ function bindFX() {
     const c = sliderVal(cut);
     const hz = 30 * Math.pow(18000/30, c);
     master.setCutoff(hz);
-    master.setReso(sliderVal(res));
-    master.setDelayMix(sliderVal(dm));
-    master.setDelayFB(sliderVal(df));
-    master.setReverbMix(sliderVal(rv));
+    master.setDelay(sliderVal(dly));
+    master.setReverb(sliderVal(rev));
   };
 
-  for (const el of [drv, cut, res, dm, df, rv]) {
+  for (const el of [drv, cut, dly, rev]) {
     el.addEventListener('input', async () => {
       await ensureAudio();
       applyAll();
