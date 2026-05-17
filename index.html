@@ -429,43 +429,36 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
   border-radius: 3px;
 }
 
-/* ===== Right-side page nav (placeholder for future 303 page) ===== */
+/* ===== Right-side machine toggle (single button shows destination) ===== */
 .page-nav {
-  display: flex; flex-direction: column;
-  gap: 4px;
+  display: flex;
   border-left: 1px solid var(--ink);
   padding-left: 8px;
   align-self: stretch;
-  justify-content: center;
+  align-items: center;
 }
 .page-btn {
   border: 1px solid var(--ink);
-  border-radius: 4px;
-  background: linear-gradient(180deg, #efe2c2 0%, #c9b88f 100%);
-  color: var(--ink);
-  padding: 4px 10px;
-  font-size: clamp(9px, 1.2vw, 11px);
+  border-radius: 6px;
+  background: linear-gradient(180deg, #2a1d10, #4a3a28);
+  color: var(--display-on);
+  padding: 8px 14px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: clamp(13px, 1.8vw, 18px);
   font-weight: 900;
-  letter-spacing: .15em;
-  text-transform: uppercase;
+  letter-spacing: .12em;
   cursor: pointer;
+  min-width: 56px;
+  height: 100%;
+  text-shadow: 0 0 6px rgba(255,138,31,.7);
   box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.6),
-    inset 0 -2px 0 rgba(0,0,0,.15),
+    inset 0 1px 0 rgba(255,255,255,.15),
+    inset 0 -2px 0 rgba(0,0,0,.4),
+    inset 0 0 8px rgba(255,138,31,.18),
     0 1px 0 rgba(0,0,0,.25);
+  transition: transform 30ms ease-out, box-shadow 30ms ease-out;
 }
-.page-btn.active {
-  background: linear-gradient(180deg, #e85b54 0%, #a8231e 100%);
-  color: var(--accent-white);
-  box-shadow:
-    inset 0 1px 0 rgba(255,255,255,.4),
-    inset 0 -2px 0 rgba(0,0,0,.25),
-    0 0 8px rgba(255,90,40,.45);
-}
-.page-btn.ghost {
-  opacity: .45;
-  cursor: not-allowed;
-}
+.page-btn:active { transform: translateY(1px) scale(.98); }
 
 /* ===== Orientation guard ===== */
 .rotate-hint {
@@ -555,8 +548,7 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
         <div class="slider"><div class="lbl">Reverb</div><input type="range" min="0" max="1000" value="0"    id="fxReverb"></div>
       </div>
       <nav class="page-nav">
-        <button class="page-btn active" id="page808">808</button>
-        <button class="page-btn ghost" id="page303" disabled title="Coming soon">303</button>
+        <button class="page-btn" id="pageToggle" aria-label="Switch machine">303</button>
       </nav>
     </footer>
   </div>
@@ -798,11 +790,11 @@ function buildMasterBus(ctx) {
   dlyRet.connect(out);
   revRet.connect(out);
 
-  // Fixed resonance: pre-self-oscillation. Worklet's k = reso*4; oscillates
-  // around k≈4.0, so 0.85 (k=3.4) gives a strong colored peak that never
-  // self-oscillates. Modest internal drive for filter coloration only.
-  const FIXED_RESO = 0.85;
-  const FIXED_FILTER_DRIVE = 0.25;
+  // Fixed resonance: gentle pre-oscillation peak. Worklet's k = reso*4;
+  // self-oscillates around k≈4.0, so 0.55 (k=2.2) gives a tasteful resonant
+  // bump without the screaming character. Modest internal drive only.
+  const FIXED_RESO = 0.55;
+  const FIXED_FILTER_DRIVE = 0.18;
   if (workletReady) {
     filter.parameters.get('resonance').setValueAtTime(FIXED_RESO, ctx.currentTime);
     filter.parameters.get('drive').setValueAtTime(FIXED_FILTER_DRIVE, ctx.currentTime);
@@ -999,20 +991,19 @@ function createVoices(ctx, dest) {
     const peak = accent ? 1.0 : 0.7;
     const env = metalCluster(time, 0.06, peak, 7000, 8000, 1.2);
     env.connect(dest);
-    // choke any open hat envelope
+    // choke any open hat envelope: cancel its tail and let it decay fast
     if (pendingOH) {
       const g = pendingOH.env.gain;
       try {
         g.cancelScheduledValues(time);
-        g.setValueAtTime(g.value, time);
-        g.exponentialRampToValueAtTime(0.0008, time + 0.02);
+        g.setTargetAtTime(0, time, 0.004);
       } catch(_) {}
       pendingOH = null;
     }
   }
   function oh(time, accent) {
     const peak = accent ? 0.95 : 0.65;
-    const env = metalCluster(time, 0.45, peak, 7000, 8000, 1.0);
+    const env = metalCluster(time, 1.4, peak, 7000, 8000, 1.0);
     env.connect(dest);
     pendingOH = { env, time };
   }
@@ -1082,10 +1073,22 @@ const muted   = new Array(N_VOICES).fill(false);
 const soloed  = new Array(N_VOICES).fill(false);
 
 const pIdx = (v, s) => v * N_STEPS + s;
+// VOICE_NAMES = ['BD','SD','CH','OH','CP','CB','CY'] → CH=2, OH=3
+const CH_IDX = 2, OH_IDX = 3;
 function cycleCell(v, s) {
   const i = pIdx(v, s);
   pattern[i] = (pattern[i] + 1) % 3;
-  return pattern[i];
+  // CH and OH are exclusive at the same step: turning on one clears the other.
+  let partnerCleared = -1;
+  if (pattern[i] !== 0 && (v === CH_IDX || v === OH_IDX)) {
+    const partner = v === CH_IDX ? OH_IDX : CH_IDX;
+    const pi = pIdx(partner, s);
+    if (pattern[pi] !== 0) {
+      pattern[pi] = 0;
+      partnerCleared = partner;
+    }
+  }
+  return { state: pattern[i], partnerCleared };
 }
 function isAudible(v) {
   const anySolo = soloed.some(Boolean);
@@ -1189,10 +1192,6 @@ function buildUI() {
     }
   }
 
-  // contents() consumes children directly; rebind row container by giving each row a wrapper class via data
-  // (the .row.muted / .row.dim styles target `.row`, but display:contents means we need a different approach)
-  // Switch to applying muted/dim classes directly to the row's cells instead.
-
   // delegated tap handler for cells (touchstart for low-latency)
   const onCellTap = (ev) => {
     const t = ev.target;
@@ -1200,10 +1199,9 @@ function buildUI() {
     ev.preventDefault();
     const v = parseInt(t.dataset.v, 10);
     const s = parseInt(t.dataset.s, 10);
-    const state = cycleCell(v, s);
-    t.classList.remove('on','accent');
-    if (state === 1) t.classList.add('on');
-    if (state === 2) t.classList.add('accent');
+    const { state, partnerCleared } = cycleCell(v, s);
+    syncCellVisual(v, s, state);
+    if (partnerCleared >= 0) syncCellVisual(partnerCleared, s, 0);
   };
   grid.addEventListener('touchstart', onCellTap, { passive: false });
   grid.addEventListener('mousedown', onCellTap);
@@ -1227,6 +1225,13 @@ function buildUI() {
 function groupClass(s) {
   const g = Math.floor(s / 4);
   return ['grp-a','grp-b','grp-c','grp-d'][g];
+}
+
+function syncCellVisual(v, s, state) {
+  const el = cells[v][s];
+  el.classList.remove('on','accent');
+  if (state === 1) el.classList.add('on');
+  if (state === 2) el.classList.add('accent');
 }
 
 function applyRowDim() {
@@ -1267,6 +1272,17 @@ function bindTransport() {
     const v = prompt('BPM (40-240)', String(bpm));
     if (v) setBPM(parseInt(v, 10) || bpm);
   });
+  // Machine toggle: button label is the *destination*. 303 view not built
+  // yet, so this only flips the label for now; real view switching lands
+  // when the Bass screen is implemented.
+  document.getElementById('pageToggle').addEventListener('click', switchMachine);
+}
+
+let currentMachine = '808';
+function switchMachine() {
+  currentMachine = currentMachine === '808' ? '303' : '808';
+  document.getElementById('pageToggle').textContent =
+    currentMachine === '808' ? '303' : '808';
 }
 
 /* ---------- FX sliders ---------- */
@@ -1363,8 +1379,8 @@ requestAnimationFrame(renderLoop);
   I(0, 0, 2); I(0, 4, 1); I(0, 8, 1); I(0, 12, 1);
   // SD
   I(1, 4, 1); I(1, 12, 2);
-  // CH (8ths)
-  for (let s = 0; s < 16; s += 2) I(2, s, 1);
+  // CH (8ths) — step 14 belongs to OH, so skip it
+  for (let s = 0; s < 16; s += 2) if (s !== 14) I(2, s, 1);
   // OH off-beat
   I(3, 14, 1);
   // CB taste
