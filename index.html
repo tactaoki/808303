@@ -704,6 +704,17 @@ input.display:focus {
   50%      { box-shadow: 0 0 0 2px rgba(255,138,31,.55); }
 }
 
+/* Tap acknowledgement: every interactive element flashes briefly on press
+   so even no-op taps (e.g. STOP while already stopped) feel acknowledged.
+   filter: brightness keeps this orthogonal to existing box-shadow / outline
+   / ::after / transform effects, so it composes without visual conflicts. */
+@keyframes ackTap {
+  0%   { filter: brightness(1.40); }
+  60%  { filter: brightness(1.15); }
+  100% { filter: brightness(1.00); }
+}
+.ack-flash { animation: ackTap 180ms ease-out; }
+
 /* Tighter layout for short screens */
 @media (max-height: 380px) {
   .panel { margin: 4px 22px; }
@@ -1870,6 +1881,33 @@ function initOptions() {
   refreshOptionsUI();
 }
 
+/* ---------- Tap acknowledgement (universal touch feedback) ----------
+   Document-level pointerdown delegation flashes any interactive control
+   for 180ms, even when the action is a no-op. Best-effort haptic
+   vibration on Android; iOS Safari silently ignores it. */
+
+const ACK_SELECTOR =
+  '.btn, .cell, .row-label .ms button, .page-btn, .fill-btn, ' +
+  'input[type=range], input.display';
+
+function ackTap(el) {
+  el.classList.remove('ack-flash');
+  void el.offsetWidth;   // force reflow so the animation restarts on rapid taps
+  el.classList.add('ack-flash');
+  if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
+}
+
+function bindAckFeedback() {
+  document.addEventListener('pointerdown', (e) => {
+    const t = e.target.closest(ACK_SELECTOR);
+    if (!t || t.disabled) return;
+    ackTap(t);
+  }, { passive: true });
+  document.addEventListener('animationend', (e) => {
+    if (e.animationName === 'ackTap') e.target.classList.remove('ack-flash');
+  });
+}
+
 /* ---------- bootstrap ---------- */
 
 buildUI();
@@ -1877,6 +1915,7 @@ bindTransport();
 const applyFX = bindFX();
 bindBoot(applyFX);
 initOptions();
+bindAckFeedback();
 setBPM(120);
 requestAnimationFrame(renderLoop);
 
