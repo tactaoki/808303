@@ -2541,18 +2541,24 @@ function renderLoop() {
     }
     // Column playhead ring: freeze on fillStep while fill is held so the
     // user sees which step is being repeated; otherwise it tracks the
-    // currently audible step.
+    // currently audible step. Incremental update — only remove .cur from
+    // the previous column and add it to the new one (28 DOM ops vs the
+    // old 224 it took to walk every cell on every step change).
     const colStep = fillActive ? fillStep : currentAudibleStep;
     if (colStep !== lastColStep) {
-      for (let v = 0; v < N_VOICES; v++) {
-        for (let i = 0; i < N_STEPS; i++) {
-          cells[v][i].classList.toggle('cur', i === colStep);
+      if (lastColStep >= 0) {
+        for (let v = 0; v < N_VOICES; v++) {
+          cells[v][lastColStep].classList.remove('cur');
+        }
+        for (let r = 0; r < N_ROWS_303; r++) {
+          if (cells303[r][lastColStep]) cells303[r][lastColStep].classList.remove('cur');
         }
       }
+      for (let v = 0; v < N_VOICES; v++) {
+        cells[v][colStep].classList.add('cur');
+      }
       for (let r = 0; r < N_ROWS_303; r++) {
-        for (let i = 0; i < N_STEPS; i++) {
-          if (cells303[r][i]) cells303[r][i].classList.toggle('cur', i === colStep);
-        }
+        if (cells303[r][colStep]) cells303[r][colStep].classList.add('cur');
       }
       lastColStep = colStep;
     }
