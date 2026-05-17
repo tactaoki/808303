@@ -834,17 +834,19 @@ input.display:focus {
   background: #15151a;
   color: #e8e8ea;
 }
-/* Silver-themed cell defaults; on/accent override per group keeps the LED feel. */
+/* Silver-themed cell defaults; on/accent override per group keeps the LED feel.
+   Alternating brightness every 4 steps (dark / light / dark / light) so the
+   beat groupings are read at a glance. */
 .panel[data-machine="303"] .cell {
   background: #888c92;
   box-shadow:
     inset 0 1px 0 rgba(255,255,255,.3),
     inset 0 -2px 0 rgba(0,0,0,.30);
 }
-.panel[data-machine="303"] .cell.grp-a { background: #9aa0a6; }
-.panel[data-machine="303"] .cell.grp-b { background: #969aa0; }
-.panel[data-machine="303"] .cell.grp-c { background: #a4aab0; }
-.panel[data-machine="303"] .cell.grp-d { background: #8c9298; }
+.panel[data-machine="303"] .cell.grp-a,
+.panel[data-machine="303"] .cell.grp-c { background: #8e9298; }   /* dark band */
+.panel[data-machine="303"] .cell.grp-b,
+.panel[data-machine="303"] .cell.grp-d { background: #aeb4ba; }   /* light band */
 .panel[data-machine="303"] .cell.on,
 .panel[data-machine="303"] .cell.grp-a.on,
 .panel[data-machine="303"] .cell.grp-b.on,
@@ -1114,21 +1116,23 @@ let workletSupported = true;
 /* Per-track balancing chain. Lightly tames peaks so different drums and the
    bass synth sit at similar levels going into the master bus. Not exposed
    in the UI — purely an internal "even out the grain" stage. */
-function makeBalanceChannel(ctx, dest) {
+function makeBalanceChannel(ctx, dest, boostDb) {
+  const input = ctx.createGain();
+  input.gain.value = Math.pow(10, (boostDb || 0) / 20);
   const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -16;   // start compressing well below clip
-  comp.knee.value      = 8;     // soft knee for transparency
-  comp.ratio.value     = 2.5;   // gentle ratio
-  comp.attack.value    = 0.004; // fast enough to catch percussive transients
-  comp.release.value   = 0.18;  // smooth release
+  comp.threshold.value = -16;
+  comp.knee.value      = 8;
+  comp.ratio.value     = 2.5;
+  comp.attack.value    = 0.004;
+  comp.release.value   = 0.18;
   const lim = ctx.createDynamicsCompressor();
-  lim.threshold.value  = -2;    // brick-wall just under 0 dBFS
+  lim.threshold.value  = -2;
   lim.knee.value       = 0;
   lim.ratio.value      = 20;
   lim.attack.value     = 0.0008;
   lim.release.value    = 0.06;
-  comp.connect(lim).connect(dest);
-  return comp;   // voice nodes connect here
+  input.connect(comp).connect(lim).connect(dest);
+  return input;   // voice nodes connect to the input gain
 }
 
 async function ensureAudio() {
@@ -1154,8 +1158,8 @@ async function ensureAudio() {
     // UI. Each drum voice and the 303 bass get their own light dynamics
     // stage before feeding the shared master bus.
     trackChannels = {
-      bd:   makeBalanceChannel(ctx, master.input),
-      sd:   makeBalanceChannel(ctx, master.input),
+      bd:   makeBalanceChannel(ctx, master.input, 1.5),  // a touch hotter than the rest
+      sd:   makeBalanceChannel(ctx, master.input, 1.5),
       ch:   makeBalanceChannel(ctx, master.input),
       oh:   makeBalanceChannel(ctx, master.input),
       cp:   makeBalanceChannel(ctx, master.input),
@@ -1595,13 +1599,15 @@ function isSnapCommitStep(mode, step) {
 const DEFAULTS = {
   delayDenom: 8, delayDotted: true,
   resonance: 0.5,
-  // Per-category snap. Notes / Tracks default to "Loop" (musical bar edits),
-  // Effects sliders are "Off" so sweeps feel responsive, and the FX Reset
-  // button defaults to "Off" so it acts as an immediate panic control.
-  snapNotes:        'loop',
+  // Per-category snap defaults — Off / Loop / Off / Loop from top to bottom
+  // of the Options panel. Notes default immediate so editing feels direct;
+  // Tracks default to bar-snap so mute / solo moves stay musical; FX
+  // sliders are immediate for live sweeps; FX Reset snaps to the bar so
+  // it acts as a "drop back to dry on the next downbeat" control.
+  snapNotes:        'off',
   snapTracks:       'loop',
   snapEffects:      'off',
-  snapEffectsReset: 'off',
+  snapEffectsReset: 'loop',
   // Bass synth (303 view)
   bassKey: 'A',
   bassMode: 'minor',
@@ -1833,7 +1839,10 @@ function schedule303(sourceStep, realStep, time) {
   filt.frequency.exponentialRampToValueAtTime(150, time + Math.max(stepDur * 1.5, 0.06));
 
   const amp = ctx.createGain();
-  const peak = isAccent ? AMP_PEAK_A : AMP_PEAK;
+  // Triangle has less harmonic content than square so it sounds quieter at
+  // the same gain; bump it +4.5 dB (~1.68x) to even the two waveforms out.
+  const waveBoost = options.bassWave === 'triangle' ? 1.6788 : 1.0;
+  const peak = (isAccent ? AMP_PEAK_A : AMP_PEAK) * waveBoost;
   amp.gain.setValueAtTime(0, time);
   amp.gain.linearRampToValueAtTime(peak, time + 0.002);
   // No release scheduled yet — release is set when the phrase actually ends.
