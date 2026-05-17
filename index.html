@@ -2425,14 +2425,11 @@ function leadReleaseFilterEnv(t) {
   }
 }
 
-function leadTrigger(t, freq) {
-  ensureLeadVoice();
+function leadSetPitch(t, freq) {
   const v = liveLead; if (!v) return;
   const ratio = LEAD_SUB_RATIO[options.leadSub] || 1;
   const fMain = v.oscMain.frequency;
   const fSub  = v.oscSub.frequency;
-  // Portamento: glide from previous pitch to new pitch over 60 ms. First
-  // trigger of the session has no previous — jump.
   if (options.leadPorta === 'on' && v.lastFreq != null && v.lastFreq !== freq) {
     fMain.cancelScheduledValues(t);
     fMain.setValueAtTime(v.lastFreq, t);
@@ -2447,7 +2444,12 @@ function leadTrigger(t, freq) {
     fSub.setValueAtTime(freq * ratio, t);
   }
   v.lastFreq = freq;
+}
 
+function leadTrigger(t, freq) {
+  ensureLeadVoice();
+  const v = liveLead; if (!v) return;
+  leadSetPitch(t, freq);
   const A = options.leadAttack;
   const D = options.leadDecay;
   const S = options.leadSustain;
@@ -2457,6 +2459,13 @@ function leadTrigger(t, freq) {
   g.linearRampToValueAtTime(S,   t + A + D);
   leadFireFilterEnv(t);
   v.isOn = true;
+}
+
+// Legato: consecutive cells update pitch (with optional portamento) but
+// leave the amp and filter envelopes running at sustain — no re-attack.
+function leadLegato(t, freq) {
+  ensureLeadVoice();
+  leadSetPitch(t, freq);
 }
 
 function leadRelease(t) {
@@ -2475,7 +2484,9 @@ function scheduleLead(sourceStep, realStep, time) {
     if (liveLead && liveLead.isOn) leadRelease(time);
     return;
   }
-  leadTrigger(time, rowLeadPitch(row));
+  const freq = rowLeadPitch(row);
+  if (liveLead && liveLead.isOn) leadLegato(time, freq);
+  else                            leadTrigger(time, freq);
 }
 
 function scheduleStep(step, time) {
