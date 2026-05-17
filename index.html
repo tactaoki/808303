@@ -117,33 +117,18 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
 .brand {
   background: var(--accent-red);
   color: var(--accent-white);
-  padding: 0 8px;
-  display: flex; align-items: center; gap: 6px;
+  padding: 0 10px;
+  display: flex; align-items: center;
   border-right: 1px solid var(--ink);
   box-shadow: inset 0 -2px 0 var(--accent-red-d);
   flex: 0 0 auto;
 }
 .brand .model {
-  font-size: clamp(8px, 1.1vw, 11px);
-  letter-spacing: .1em;
-  font-weight: 800;
-  line-height: 1.05;
-}
-.brand .num {
-  font-size: clamp(14px, 2vw, 20px);
+  font-size: clamp(11px, 1.5vw, 14px);
   letter-spacing: .04em;
   font-weight: 900;
-  border: 2px solid var(--accent-white);
-  padding: 0 4px;
-  border-radius: 2px;
   line-height: 1;
-  display: inline-flex; align-items: center; height: 60%;
-}
-.brand .sub {
-  font-size: clamp(7px, .9vw, 10px);
-  letter-spacing: .18em;
-  opacity: .9;
-  display: none;
+  font-style: italic;
 }
 
 .transport {
@@ -224,9 +209,20 @@ input.display:focus {
     0 0 10px rgba(255,138,31,.4);
 }
 .bpm .step-btn {
-  width: 24px; height: 24px; border-radius: 50%;
-  padding: 0; font-size: 14px; line-height: 1;
+  width: 26px; height: 26px; border-radius: 50%;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
   min-height: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+.btn.ctrl {
+  font-size: clamp(8px, 1.1vw, 11px);
+  padding: 0 8px;
+  letter-spacing: .12em;
 }
 
 .step-leds {
@@ -533,13 +529,13 @@ input.display:focus {
     <!-- Header -->
     <header class="header">
       <div class="brand">
-        <span class="model">RHYTHM COMPOSER</span>
-        <span class="num">808</span>
-        <span class="sub">MODEL</span>
+        <span class="model">Rhythm</span>
       </div>
       <div class="transport">
         <button class="btn play" id="playBtn">PLAY</button>
         <button class="btn" id="stopBtn">STOP</button>
+        <button class="btn ctrl" id="clearBtn">CLEAR</button>
+        <button class="btn ctrl" id="optBtn" aria-label="Options">OPT</button>
         <div class="bpm">
           <span class="label">TEMPO</span>
           <button class="btn step-btn" id="bpmDown">−</button>
@@ -1250,6 +1246,13 @@ function syncCellVisual(v, s, state) {
   if (state === 2) el.classList.add('accent');
 }
 
+function clearAllNotes() {
+  pattern.fill(0);
+  for (let v = 0; v < N_VOICES; v++) {
+    for (let s = 0; s < N_STEPS; s++) syncCellVisual(v, s, 0);
+  }
+}
+
 function applyRowDim() {
   const anySolo = soloed.some(Boolean);
   for (let v = 0; v < N_VOICES; v++) {
@@ -1283,6 +1286,10 @@ function bindTransport() {
     if (!isPlaying) play();
   });
   document.getElementById('stopBtn').addEventListener('click', stop);
+  document.getElementById('clearBtn').addEventListener('click', clearAllNotes);
+  document.getElementById('optBtn').addEventListener('click', () => {
+    // Options screen is not built yet; this button is a placeholder.
+  });
   document.getElementById('bpmUp').addEventListener('click', () => setBPM(bpm + 1));
   document.getElementById('bpmDown').addEventListener('click', () => setBPM(bpm - 1));
   const bpmEl = document.getElementById('bpmDisplay');
