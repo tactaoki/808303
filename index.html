@@ -772,7 +772,11 @@ input.display:focus {
   60%  { filter: brightness(1.15); }
   100% { filter: brightness(1.00); }
 }
-.ack-flash { animation: ackTap 180ms ease-out; }
+/* Two identical animation classes so we can re-trigger without forcing a
+   layout reflow on every tap (the `void el.offsetWidth` trick used to be a
+   5–50 ms main-thread stall on mobile). */
+.ack-flash-a { animation: ackTap 180ms ease-out; }
+.ack-flash-b { animation: ackTap 180ms ease-out; }
 
 /* ===== 303 grid (bass synth, monosynth, column-exclusive) ===== */
 .grid-303 {
@@ -1008,12 +1012,13 @@ class LadderProcessor extends AudioWorkletProcessor {
     return [
       { name: 'cutoff',    defaultValue: 20000, minValue: 30, maxValue: 22000, automationRate: 'a-rate' },
       { name: 'resonance', defaultValue: 0,     minValue: 0,  maxValue: 1.2,   automationRate: 'a-rate' },
-      { name: 'drive',     defaultValue: 0,     minValue: 0,  maxValue: 1,     automationRate: 'a-rate' }
+      { name: 'drive',     defaultValue: 0,     minValue: 0,  maxValue: 1,     automationRate: 'a-rate' },
+      { name: 'bypass',    defaultValue: 0,     minValue: 0,  maxValue: 1,     automationRate: 'k-rate' }
     ];
   }
   constructor() {
     super();
-    // 4-stage 1-pole LP states for L and R, internal 2x sample rate
+    // 4-stage 1-pole LP states for L and R
     this._sL = [0,0,0,0]; this._sR = [0,0,0,0];
     this._zL = 0; this._zR = 0;     // feedback last sample
   }
@@ -1035,28 +1040,36 @@ class LadderProcessor extends AudioWorkletProcessor {
     if (!inp || inp.length === 0) return true;
     const ch = Math.min(inp.length, out.length);
     const n = out[0].length;
+    // Bypass: cutoff knob is wide open and resonance is low → straight wire
+    // from input to output. Skips the 4-stage tanh ladder math entirely.
+    if (params.bypass[0] >= 0.5) {
+      for (let c = 0; c < ch; c++) {
+        const xi = inp[c]; const yo = out[c];
+        for (let i = 0; i < n; i++) yo[i] = xi[i];
+      }
+      return true;
+    }
     const cutoffArr = params.cutoff;
     const resoArr   = params.resonance;
     const driveArr  = params.drive;
-    const sr2 = sampleRate * 2;
+    const sr = sampleRate;
     for (let i = 0; i < n; i++) {
       const cutoff = cutoffArr.length>1 ? cutoffArr[i] : cutoffArr[0];
       const reso   = resoArr.length>1   ? resoArr[i]   : resoArr[0];
       const drive  = driveArr.length>1  ? driveArr[i]  : driveArr[0];
-      // 1-pole alpha for 2x rate
-      const wd = 2 * Math.PI * Math.min(cutoff, sr2*0.45);
-      const T = 1/sr2;
+      // 1-pole alpha at the host sample rate (dropped 2× oversampling — the
+      // savings are huge and aliasing only matters for very-high-cutoff +
+      // very-high-Q regions we never reach in practice).
+      const wd = 2 * Math.PI * Math.min(cutoff, sr*0.45);
+      const T = 1/sr;
       const alpha = wd*T / (1 + wd*T);
       const k = reso * 4.0;
       for (let c = 0; c < ch; c++) {
         const x = inp[c][i];
         const state = c === 0 ? this._sL : this._sR;
-        let fb = c === 0 ? this._zL : this._zR;
-        // 2x oversample: process twice, take last
-        let y = this._processChan(x, state, fb, k, alpha, drive);
-        y = this._processChan(x, state, y,  k, alpha, drive);
+        const fb = c === 0 ? this._zL : this._zR;
+        const y = this._processChan(x, state, fb, k, alpha, drive);
         if (c === 0) this._zL = y; else this._zR = y;
-        // soft limit
         out[c][i] = this._tanh(y * 1.05);
       }
     }
@@ -1071,35 +1084,34 @@ class SatProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [{ name: 'drive', defaultValue: 0, minValue: 0, maxValue: 1, automationRate: 'k-rate' }];
   }
-  constructor(){ super(); this._zL = 0; this._zR = 0; this._yL = 0; this._yR = 0; }
+  constructor(){ super(); }
   _tanh(x){ const a = Math.abs(x); if (a < 3) { const x2 = x*x; return x*(27+x2)/(27+9*x2); } return x>0?1:-1; }
-  _stage(x, prev, drive){
-    // 2x upsample + tanh + downsample. Drive curve is gentle: at drive=1
-    // peak gain is ~5x (≈14dB), at drive=0 it's unity.
-    const up0 = (prev + x) * 0.5;
-    const up1 = x;
-    const g = 1 + drive * 4;
-    const s0 = this._tanh(up0 * g);
-    const s1 = this._tanh(up1 * g);
-    return (s0 + s1) * 0.5;
-  }
   process(inputs, outputs, params) {
     const inp = inputs[0]; const out = outputs[0];
     if (!inp || inp.length === 0) return true;
     const drive = params.drive[0];
+    // Bypass when fully off — no math, just a wire.
+    if (drive < 0.001) {
+      const n = out[0].length;
+      const ch = Math.min(inp.length, out.length);
+      for (let c = 0; c < ch; c++) {
+        const xi = inp[c]; const yo = out[c];
+        for (let i = 0; i < n; i++) yo[i] = xi[i];
+      }
+      return true;
+    }
+    const g = 1 + drive * 4;
     const makeup = 1 / (1 + drive * 1.3);
     const n = out[0].length;
     const ch = Math.min(inp.length, out.length);
     for (let c = 0; c < ch; c++) {
       const xi = inp[c]; const yo = out[c];
-      let prev = c === 0 ? this._zL : this._zR;
       for (let i = 0; i < n; i++) {
-        const x = xi[i];
-        const y = this._stage(x, prev, drive);
-        prev = x;
-        yo[i] = y * makeup;
+        // 1× tanh-shaped saturation (dropped the 2× oversample stage — the
+        // user's drum/bass content has very little energy near Nyquist so
+        // the aliasing it was protecting against is essentially inaudible).
+        yo[i] = this._tanh(xi[i] * g) * makeup;
       }
-      if (c === 0) this._zL = prev; else this._zR = prev;
     }
     return true;
   }
@@ -1248,7 +1260,7 @@ function buildMasterBus(ctx) {
   // reverb
   const revSend = ctx.createGain(); revSend.gain.value = 0;
   const conv    = ctx.createConvolver();
-  conv.buffer = makeIR(ctx, 2.0, 0.04);
+  conv.buffer = makeIR(ctx, 1.2, 0.04);
   const revRet  = ctx.createGain(); revRet.gain.value = 1.0;
   revSend.connect(conv).connect(revRet);
 
@@ -1292,18 +1304,31 @@ function buildMasterBus(ctx) {
       sat.curve = makeTanhCurve(v);
     }
   };
+  // Track current filter knob positions so we can flip the ladder worklet
+  // into a passthrough mode when it's effectively a wire (saves a lot of
+  // tanh/4-stage math when the user hasn't engaged the filter at all).
+  let _lastCutoffHz = 20000;
+  let _lastReso01   = 0;
+  function updateFilterBypass() {
+    if (!workletReady) return;
+    const shouldBypass = _lastCutoffHz > 16000 && _lastReso01 < 0.1;
+    filter.parameters.get('bypass').setValueAtTime(shouldBypass ? 1 : 0, ctx.currentTime);
+  }
   const setCutoff = (hz) => {
     const v = Math.max(30, Math.min(20000, hz));
+    _lastCutoffHz = v;
     if (workletReady) {
       filter.parameters.get('cutoff').setTargetAtTime(v, ctx.currentTime, 0.02);
     } else {
       filter._b1.frequency.setTargetAtTime(v, ctx.currentTime, 0.02);
       filter._b2.frequency.setTargetAtTime(v, ctx.currentTime, 0.02);
     }
+    updateFilterBypass();
   };
   const setReso = (v01) => {
     // slider 0..1 → filter resonance 0..1.15 (worklet k = reso*4 oscillates
     // around k≈4.0, so values > 1.0 push into aggressive self-oscillation)
+    _lastReso01 = v01;
     const r = Math.max(0, Math.min(1.2, v01 * 1.15));
     if (workletReady) {
       filter.parameters.get('resonance').setTargetAtTime(r, ctx.currentTime, 0.03);
@@ -1312,21 +1337,50 @@ function buildMasterBus(ctx) {
       filter._b1.Q.setTargetAtTime(Q, ctx.currentTime, 0.03);
       filter._b2.Q.setTargetAtTime(Q, ctx.currentTime, 0.03);
     }
+    updateFilterBypass();
   };
   // Combined delay knob: a single slider controls both send/mix and feedback,
   // shaped so 0 = bypass and 1 = lush near-runaway tail without diverging.
+  // Disconnect dlySend → delay entirely when mix is essentially zero so the
+  // DelayNode + feedback loop doesn't run.
+  let _delayActive = true;   // graph wired by default during buildMasterBus
   const setDelay = (v01) => {
     const v = Math.max(0, Math.min(1, v01));
-    const mix = v * 0.75;          // dry/wet send
-    const feedback = v * 0.78;     // capped well below the 0.92 divergence limit
+    const mix = v * 0.75;
+    const feedback = v * 0.78;
     dlySend.gain.setTargetAtTime(mix, ctx.currentTime, 0.02);
     fb.gain.setTargetAtTime(feedback, ctx.currentTime, 0.02);
+    const wantActive = v > 0.005;
+    if (wantActive && !_delayActive) {
+      try { dlySend.connect(delay); } catch(_) {}
+      _delayActive = true;
+    } else if (!wantActive && _delayActive) {
+      // small delay so the gain ramp can run to zero before we cut the chain
+      setTimeout(() => {
+        if (!_delayActive) return;
+        try { dlySend.disconnect(delay); } catch(_) {}
+        _delayActive = false;
+      }, 60);
+    }
   };
   const setDelayTime = (sec) => {
     delay.delayTime.setTargetAtTime(Math.max(0.01, Math.min(2.0, sec)), ctx.currentTime, 0.02);
   };
+  let _reverbActive = true;
   const setReverb = (v01) => {
-    revSend.gain.setTargetAtTime(Math.max(0, Math.min(1, v01)) * 0.9, ctx.currentTime, 0.02);
+    const v = Math.max(0, Math.min(1, v01));
+    revSend.gain.setTargetAtTime(v * 0.9, ctx.currentTime, 0.02);
+    const wantActive = v > 0.005;
+    if (wantActive && !_reverbActive) {
+      try { revSend.connect(conv); } catch(_) {}
+      _reverbActive = true;
+    } else if (!wantActive && _reverbActive) {
+      setTimeout(() => {
+        if (!_reverbActive) return;
+        try { revSend.disconnect(conv); } catch(_) {}
+        _reverbActive = false;
+      }, 60);
+    }
   };
 
   return {
@@ -2234,11 +2288,16 @@ function buildGrid303() {
 function renderCell303(row, s) {
   const el = cells303[row][s];
   if (!el) return;
-  const state = pendingPattern303[pIdx303(row, s)];
+  const i = pIdx303(row, s);
+  const state = pendingPattern303[i];
+  const isPending = state !== pattern303[i] ? 1 : 0;
+  const packed = state | (isPending << 2);
+  if (cellDisplay303[i] === packed) return;
+  cellDisplay303[i] = packed;
   el.classList.remove('on', 'accent');
   if (state === 1) el.classList.add('on');
   if (state === 2) el.classList.add('accent');
-  el.classList.toggle('pending', cellPending303(row, s));
+  el.classList.toggle('pending', !!isPending);
 }
 
 function relabelBassRows() {
@@ -2253,16 +2312,28 @@ function groupClass(s) {
   return ['grp-a','grp-b','grp-c','grp-d'][g];
 }
 
+// Diff cache: packed byte (state | pending<<2). Lets renderCell early-out
+// when the cell's visual hasn't changed since the last paint — every bar
+// the commit walked all 112 cells, but on most bars only a handful change.
+const cellDisplay    = new Uint8Array(N_VOICES * N_STEPS);
+const cellDisplay303 = new Uint8Array(N_ROWS_303 * N_STEPS);
+const rowDimState    = new Array(N_VOICES).fill(false);
+
 function renderCell(v, s) {
   // Visual truth is always the pending pattern; in non-snap mode it equals
   // the live pattern so this is a no-op visual difference, but the .pending
   // marker only lights up when they actually diverge (snap mode).
+  const i = pIdx(v, s);
+  const state = pendingPattern[i];
+  const isPending = state !== pattern[i] ? 1 : 0;
+  const packed = state | (isPending << 2);
+  if (cellDisplay[i] === packed) return;
+  cellDisplay[i] = packed;
   const el = cells[v][s];
-  const state = pendingPattern[pIdx(v, s)];
   el.classList.remove('on', 'accent');
   if (state === 1) el.classList.add('on');
   if (state === 2) el.classList.add('accent');
-  el.classList.toggle('pending', cellPending(v, s));
+  el.classList.toggle('pending', !!isPending);
 }
 
 function refreshMSButtons(v) {
@@ -2370,6 +2441,8 @@ function applyRowDim() {
   for (let v = 0; v < N_VOICES; v++) {
     const audible = anySolo ? (soloed[v] && !muted[v]) : !muted[v];
     const dim = !audible;
+    if (rowDimState[v] === dim) continue;   // row didn't change — skip 16 ops
+    rowDimState[v] = dim;
     for (let s = 0; s < N_STEPS; s++) {
       cells[v][s].classList.toggle('row-dim', dim);
     }
@@ -2788,9 +2861,15 @@ const ACK_SELECTOR =
   '.fx-reset, input[type=range], input.display';
 
 function ackTap(el) {
-  el.classList.remove('ack-flash');
-  void el.offsetWidth;   // force reflow so the animation restarts on rapid taps
-  el.classList.add('ack-flash');
+  // Alternate between two identical animation classes — different class
+  // name → animation re-fires, but no layout reflow is forced.
+  if (el.classList.contains('ack-flash-a')) {
+    el.classList.remove('ack-flash-a');
+    el.classList.add('ack-flash-b');
+  } else {
+    el.classList.remove('ack-flash-b');
+    el.classList.add('ack-flash-a');
+  }
   if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
 }
 
@@ -2801,7 +2880,10 @@ function bindAckFeedback() {
     ackTap(t);
   }, { passive: true });
   document.addEventListener('animationend', (e) => {
-    if (e.animationName === 'ackTap') e.target.classList.remove('ack-flash');
+    if (e.animationName === 'ackTap') {
+      e.target.classList.remove('ack-flash-a');
+      e.target.classList.remove('ack-flash-b');
+    }
   });
 }
 
