@@ -652,19 +652,12 @@ input.display:focus {
 }
 .options-overlay .opt-row .btn { flex: 1 1 auto; min-width: 56px; }
 /* Bass key picker: clean 2 rows × 6 columns. */
-.options-overlay #bassKeyRow {
+.options-overlay #keyRow {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
   gap: 5px;
 }
-.options-overlay #bassKeyRow .btn { flex: none; min-width: 0; min-height: 32px; padding: 6px 4px; }
-/* Lead key picker: 7 cols × 2 rows = SYNC + 12 keys. */
-.options-overlay #leadKeyRow {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
-  gap: 5px;
-}
-.options-overlay #leadKeyRow .btn { flex: none; min-width: 0; min-height: 32px; padding: 6px 4px; }
+.options-overlay #keyRow .btn { flex: none; min-width: 0; min-height: 32px; padding: 6px 4px; }
 /* Snap grid: one row per category, four mode pills + leading label. */
 .options-overlay .snap-grid { display: grid; gap: 4px; }
 .options-overlay .snap-row {
@@ -1032,12 +1025,12 @@ input.display:focus {
     </section>
 
     <section class="opt-section">
-      <div class="opt-label">BASS · KEY</div>
-      <div class="opt-row" id="bassKeyRow"></div>
-      <div class="opt-label" style="margin-top:8px">BASS · SCALE</div>
+      <div class="opt-label">KEY</div>
+      <div class="opt-row" id="keyRow"></div>
+      <div class="opt-label" style="margin-top:8px">SCALE</div>
       <div class="opt-row">
-        <button class="btn ctrl" data-bass-mode="minor">Minor</button>
-        <button class="btn ctrl" data-bass-mode="major">Major</button>
+        <button class="btn ctrl" data-mode="minor">Minor</button>
+        <button class="btn ctrl" data-mode="major">Major</button>
       </div>
       <div class="opt-label" style="margin-top:8px">BASS · WAVE</div>
       <div class="opt-row">
@@ -1047,15 +1040,7 @@ input.display:focus {
     </section>
 
     <section class="opt-section">
-      <div class="opt-label">LEAD · KEY</div>
-      <div class="opt-row" id="leadKeyRow"></div>
-      <div class="opt-label" style="margin-top:8px">LEAD · SCALE</div>
-      <div class="opt-row">
-        <button class="btn ctrl" data-lead-mode="sync">Sync 303</button>
-        <button class="btn ctrl" data-lead-mode="minor">Minor</button>
-        <button class="btn ctrl" data-lead-mode="major">Major</button>
-      </div>
-      <div class="opt-label" style="margin-top:8px">LEAD · LFO RATE</div>
+      <div class="opt-label">LEAD · LFO RATE</div>
       <div class="opt-row" id="leadLfoDenomRow"></div>
       <div class="opt-row" id="leadLfoDottedRow"></div>
       <div class="opt-label" style="margin-top:8px">LEAD · PORTAMENTO</div>
@@ -1693,8 +1678,8 @@ const KEYS_LAYOUT = ['E','F','F#','G','G#','A','A#','B','C','C#','D','D#'];
 const KEY_SEMI = Object.fromEntries(KEYS.map((k, i) => [k, i]));
 
 function row303Midi(row) {
-  const scale = options.bassMode === 'minor' ? PENTA_MINOR : PENTA_MAJOR;
-  const rootMidi = KEY_SEMI[options.bassKey] + 12 * 3;  // A → MIDI 45 ≈ 110Hz
+  const scale = options.mode === 'minor' ? PENTA_MINOR : PENTA_MAJOR;
+  const rootMidi = KEY_SEMI[options.key] + 12 * 3;  // A → MIDI 45 ≈ 110Hz
   const offsets = [scale[4] - 12, scale[0], scale[1], scale[2], scale[3], scale[4], scale[0] + 12];
   return rootMidi + offsets[row];
 }
@@ -1706,13 +1691,11 @@ function row303Label(row) {
   return KEYS[((row303Midi(row) % 12) + 12) % 12];
 }
 
-// LEAD pitch math. 'sync' values mirror the 303's key/mode; otherwise the
-// LEAD has its own. Lead sits one octave above the 303 by default.
-function effectiveLeadKey()  { return options.leadKey  === 'sync' ? options.bassKey  : options.leadKey;  }
-function effectiveLeadMode() { return options.leadMode === 'sync' ? options.bassMode : options.leadMode; }
+// LEAD pitch math — shares the global key/mode with the 303. Lead sits one
+// octave above the bass.
 function rowLeadMidi(row) {
-  const scale = effectiveLeadMode() === 'minor' ? PENTA_MINOR : PENTA_MAJOR;
-  const rootMidi = KEY_SEMI[effectiveLeadKey()] + 12 * 4;
+  const scale = options.mode === 'minor' ? PENTA_MINOR : PENTA_MAJOR;
+  const rootMidi = KEY_SEMI[options.key] + 12 * 4;
   const offsets = [scale[4] - 12, scale[0], scale[1], scale[2], scale[3], scale[4], scale[0] + 12];
   return rootMidi + offsets[row];
 }
@@ -1750,13 +1733,12 @@ const DEFAULTS = {
   snapTracks:       'loop',
   snapEffects:      'off',
   snapEffectsReset: 'loop',
-  // Bass synth (303 view)
-  bassKey: 'A',
-  bassMode: 'minor',
+  // Global musical key + scale shared by every pitched voice (303, LEAD, …).
+  key:  'A',
+  mode: 'minor',
+  // Bass synth (303 view) — wave is per-voice.
   bassWave: 'sawtooth',     // sawtooth is the iconic 303 voice
-  // Lead synth (LEAD view). 'sync' values follow the 303 setting.
-  leadKey:       'sync',
-  leadMode:      'sync',
+  // Lead synth (LEAD view).
   leadLfoDenom:  8,
   leadLfoDotted: false,
   leadPorta:     'off',
@@ -2975,12 +2957,12 @@ function refreshSnapUI() {
       options['snap' + btn.dataset.snap] === btn.dataset.val);
   });
 }
-function refreshBassUI() {
-  document.querySelectorAll('#bassKeyRow .btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.key === options.bassKey);
+function refreshKeyUI() {
+  document.querySelectorAll('#keyRow .btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.key === options.key);
   });
-  document.querySelectorAll('[data-bass-mode]').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.bassMode === options.bassMode);
+  document.querySelectorAll('[data-mode]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === options.mode);
   });
   document.querySelectorAll('[data-bass-wave]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.bassWave === options.bassWave);
@@ -2992,12 +2974,6 @@ function refreshFillRateUI() {
   });
 }
 function refreshLeadUI() {
-  document.querySelectorAll('#leadKeyRow .btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.leadKey === options.leadKey);
-  });
-  document.querySelectorAll('[data-lead-mode]').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.leadMode === options.leadMode);
-  });
   document.querySelectorAll('#leadLfoDenomRow .btn, #leadLfoDottedRow .btn').forEach(btn => {
     const d = parseInt(btn.dataset.denom, 10);
     const dot = btn.dataset.dotted === '1';
@@ -3012,7 +2988,7 @@ function refreshOptionsUI() {
   refreshDelayUI();
   refreshFillRateUI();
   refreshSnapUI();
-  refreshBassUI();
+  refreshKeyUI();
   refreshLeadUI();
   document.getElementById('optReso').value = Math.round(options.resonance * 1000);
 }
@@ -3054,24 +3030,24 @@ function initOptions() {
 
   buildSnapGrid();
 
-  // Bass synth — Key buttons
-  const keyRow = document.getElementById('bassKeyRow');
+  // Global Key / Scale — used by both the 303 (bass) and LEAD voices.
+  const keyRow = document.getElementById('keyRow');
   KEYS_LAYOUT.forEach(k => {
     const b = document.createElement('button');
     b.className = 'btn ctrl';
     b.dataset.key = k;
     b.textContent = k;
     b.addEventListener('click', () => {
-      options.bassKey = k;
+      options.key = k;
       relabelBassRows();
       relabelLeadRows();
       refreshOptionsUI();
     });
     keyRow.appendChild(b);
   });
-  document.querySelectorAll('[data-bass-mode]').forEach(btn => {
+  document.querySelectorAll('[data-mode]').forEach(btn => {
     btn.addEventListener('click', () => {
-      options.bassMode = btn.dataset.bassMode;
+      options.mode = btn.dataset.mode;
       relabelBassRows();
       relabelLeadRows();
       refreshOptionsUI();
@@ -3084,29 +3060,8 @@ function initOptions() {
     });
   });
 
-  // Lead synth — Key (SYNC + 12 keys), Mode, LFO subdivision, Portamento.
-  // Audio wiring lands in a later commit; this only persists the choices.
-  const leadKeyRow = document.getElementById('leadKeyRow');
-  const LEAD_KEYS = ['sync', ...KEYS_LAYOUT];
-  LEAD_KEYS.forEach(k => {
-    const b = document.createElement('button');
-    b.className = 'btn ctrl';
-    b.dataset.leadKey = k;
-    b.textContent = k === 'sync' ? 'Sync' : k;
-    b.addEventListener('click', () => {
-      options.leadKey = k;
-      relabelLeadRows();
-      refreshOptionsUI();
-    });
-    leadKeyRow.appendChild(b);
-  });
-  document.querySelectorAll('[data-lead-mode]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      options.leadMode = btn.dataset.leadMode;
-      relabelLeadRows();
-      refreshOptionsUI();
-    });
-  });
+  // Lead synth — LFO subdivision + Portamento. Key/Scale live in the global
+  // section above (shared with the 303).
   const leadDenomRow  = document.getElementById('leadLfoDenomRow');
   const leadDottedRow = document.getElementById('leadLfoDottedRow');
   DELAY_SPEC.forEach(spec => {
