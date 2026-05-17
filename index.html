@@ -1227,6 +1227,15 @@ function makeBassChannel(ctx, dest) {
   return input;
 }
 
+function makeLeadChannel(ctx, dest) {
+  // Raw saw is loud and harmonically dense — keep the channel headroom low
+  // until Commit 3 adds the filter. Amp envelope still rides 0..1 internally.
+  const input = ctx.createGain();
+  input.gain.value = 0.35;
+  input.connect(dest);
+  return input;
+}
+
 async function ensureAudio() {
   if (!ctx) {
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -1258,6 +1267,7 @@ async function ensureAudio() {
       cb:   makeBoostChannel(ctx, master.input, 0),
       cy:   makeBoostChannel(ctx, master.input, 0),
       bass: makeBassChannel(ctx, master.input),
+      lead: makeLeadChannel(ctx, master.input),
     };
     voices = createVoices(ctx, trackChannels);
     BASS_DRIVE_CURVE = makeBassDriveCurve();
@@ -1665,6 +1675,12 @@ const pIdx303 = (row, s) => row * N_STEPS + s;
 const pattern303        = new Uint8Array(N_ROWS_303 * N_STEPS);
 const pendingPattern303 = new Uint8Array(N_ROWS_303 * N_STEPS);
 
+/* ----- LEAD (mono lead synth) pattern data ----- */
+const N_ROWS_LEAD = 7;
+const pIdxLead = (row, s) => row * N_STEPS + s;
+const patternLead        = new Uint8Array(N_ROWS_LEAD * N_STEPS);
+const pendingPatternLead = new Uint8Array(N_ROWS_LEAD * N_STEPS);
+
 const PENTA_MINOR = [0, 3, 5, 7, 10];   // 1, b3, 4, 5, b7
 const PENTA_MAJOR = [0, 2, 4, 7, 9];    // 1, 2, 3, 5, 6
 // Chromatic ordering — used for pitch math and the row303Label lookup
@@ -1688,6 +1704,23 @@ function row303Pitch(row) {
 }
 function row303Label(row) {
   return KEYS[((row303Midi(row) % 12) + 12) % 12];
+}
+
+// LEAD pitch math. 'sync' values mirror the 303's key/mode; otherwise the
+// LEAD has its own. Lead sits one octave above the 303 by default.
+function effectiveLeadKey()  { return options.leadKey  === 'sync' ? options.bassKey  : options.leadKey;  }
+function effectiveLeadMode() { return options.leadMode === 'sync' ? options.bassMode : options.leadMode; }
+function rowLeadMidi(row) {
+  const scale = effectiveLeadMode() === 'minor' ? PENTA_MINOR : PENTA_MAJOR;
+  const rootMidi = KEY_SEMI[effectiveLeadKey()] + 12 * 4;
+  const offsets = [scale[4] - 12, scale[0], scale[1], scale[2], scale[3], scale[4], scale[0] + 12];
+  return rootMidi + offsets[row];
+}
+function rowLeadPitch(row) {
+  return 440 * Math.pow(2, (rowLeadMidi(row) - 69) / 12);
+}
+function rowLeadLabel(row) {
+  return KEYS[((rowLeadMidi(row) % 12) + 12) % 12];
 }
 
 /* ----- Options (driven by the Options overlay) ----- */
@@ -1787,8 +1820,25 @@ function cycleCellOn303(arr, row, s) {
   return { state: arr[i], cleared };
 }
 
+// LEAD grid: same column-exclusive monosynth rule as 303, but Commit 2
+// scope is on/off only (no accent yet).
+function cycleCellOnLead(arr, row, s) {
+  const i = pIdxLead(row, s);
+  arr[i] = arr[i] === 0 ? 1 : 0;
+  const cleared = [];
+  if (arr[i] !== 0) {
+    for (let r = 0; r < N_ROWS_LEAD; r++) {
+      if (r === row) continue;
+      const pi = pIdxLead(r, s);
+      if (arr[pi] !== 0) { arr[pi] = 0; cleared.push(r); }
+    }
+  }
+  return { state: arr[i], cleared };
+}
+
 const cellPending = (v, s) => pendingPattern[pIdx(v, s)] !== pattern[pIdx(v, s)];
 const cellPending303 = (row, s) => pendingPattern303[pIdx303(row, s)] !== pattern303[pIdx303(row, s)];
+const cellPendingLead = (row, s) => pendingPatternLead[pIdxLead(row, s)] !== patternLead[pIdxLead(row, s)];
 const msPending   = (v) => pendingMuted[v] !== muted[v] || pendingSoloed[v] !== soloed[v];
 
 function recomputeHasPending() {
@@ -1797,6 +1847,9 @@ function recomputeHasPending() {
   }
   for (let i = 0; i < pattern303.length; i++) {
     if (pendingPattern303[i] !== pattern303[i]) { hasPending = true; return; }
+  }
+  for (let i = 0; i < patternLead.length; i++) {
+    if (pendingPatternLead[i] !== patternLead[i]) { hasPending = true; return; }
   }
   for (let v = 0; v < N_VOICES; v++) {
     if (pendingMuted[v] !== muted[v] || pendingSoloed[v] !== soloed[v]) {
@@ -1864,6 +1917,13 @@ function makeBassDriveCurve() {
 function findActiveRow303(step) {
   for (let r = 0; r < N_ROWS_303; r++) {
     if (pattern303[pIdx303(r, step)] !== 0) return r;
+  }
+  return -1;
+}
+
+function findActiveRowLead(step) {
+  for (let r = 0; r < N_ROWS_LEAD; r++) {
+    if (patternLead[pIdxLead(r, step)] !== 0) return r;
   }
   return -1;
 }
@@ -2053,6 +2113,60 @@ function schedule303(sourceStep, realStep, time) {
   }
 }
 
+/* ---------- LEAD (mono lead synth) voice ----------
+   Minimal Commit 2 voice: one persistent saw + amp ADSR. Held active across
+   cells so each row-on cell retriggers the envelope and updates pitch. */
+let liveLead = null;
+const LEAD_ATTACK  = 0.005;
+const LEAD_DECAY   = 0.150;
+const LEAD_SUSTAIN = 0.5;
+const LEAD_RELEASE = 0.250;
+
+function ensureLeadVoice() {
+  if (liveLead || !ctx || !trackChannels || !trackChannels.lead) return;
+  const osc = ctx.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.value = 220;
+  const amp = ctx.createGain();
+  amp.gain.value = 0;
+  osc.connect(amp).connect(trackChannels.lead);
+  osc.start();
+  liveLead = { osc, amp, isOn: false };
+}
+
+function leadEnvHold(g, t) {
+  if (g.cancelAndHoldAtTime) g.cancelAndHoldAtTime(t);
+  else { g.cancelScheduledValues(t); g.setValueAtTime(g.value || 0, t); }
+}
+
+function leadTrigger(t, freq) {
+  ensureLeadVoice();
+  const v = liveLead; if (!v) return;
+  v.osc.frequency.setValueAtTime(freq, t);
+  const g = v.amp.gain;
+  leadEnvHold(g, t);
+  g.linearRampToValueAtTime(1.0,          t + LEAD_ATTACK);
+  g.linearRampToValueAtTime(LEAD_SUSTAIN, t + LEAD_ATTACK + LEAD_DECAY);
+  v.isOn = true;
+}
+
+function leadRelease(t) {
+  const v = liveLead; if (!v || !v.isOn) return;
+  const g = v.amp.gain;
+  leadEnvHold(g, t);
+  g.linearRampToValueAtTime(0, t + LEAD_RELEASE);
+  v.isOn = false;
+}
+
+function scheduleLead(sourceStep, realStep, time) {
+  const row = findActiveRowLead(sourceStep);
+  if (row < 0) {
+    if (liveLead && liveLead.isOn) leadRelease(time);
+    return;
+  }
+  leadTrigger(time, rowLeadPitch(row));
+}
+
 function scheduleStep(step, time) {
   // While fill is held, sound comes from the frozen step; the LED still
   // tracks the real step so the user sees where playback will resume.
@@ -2071,6 +2185,7 @@ function scheduleStep(step, time) {
       voices[v](time, state === 2);
     }
     schedule303(sourceStep, step, time);
+    scheduleLead(sourceStep, step, time);
   }
   visualQueue.push({ step, time });
 }
@@ -2171,6 +2286,7 @@ function stop() {
   setFillActive(false);
   // Cut any sustaining 303 phrase so the bass doesn't ring forever on Stop.
   if (live303 && ctx) release303(ctx.currentTime, 0.01);
+  if (liveLead && liveLead.isOn && ctx) leadRelease(ctx.currentTime);
   document.getElementById('playBtn').classList.remove('active');
   // clear current-step UI
   for (let i = 0; i < N_STEPS; i++) {
@@ -2178,6 +2294,9 @@ function stop() {
     for (let v = 0; v < N_VOICES; v++) cells[v][i].classList.remove('cur');
     for (let r = 0; r < N_ROWS_303; r++) {
       if (cells303[r][i]) cells303[r][i].classList.remove('cur');
+    }
+    for (let r = 0; r < N_ROWS_LEAD; r++) {
+      if (cellsLead[r][i]) cellsLead[r][i].classList.remove('cur');
     }
   }
   lastColStep = -1;
@@ -2272,7 +2391,8 @@ function buildUI() {
 
 /* ---------- 303 grid build + tap handler ---------- */
 
-const cells303 = Array.from({length: N_ROWS_303}, () => new Array(N_STEPS));
+const cells303  = Array.from({length: N_ROWS_303},  () => new Array(N_STEPS));
+const cellsLead = Array.from({length: N_ROWS_LEAD}, () => new Array(N_STEPS));
 
 function buildGrid303() {
   const g303 = document.getElementById('grid303');
@@ -2336,6 +2456,66 @@ function relabelBassRows() {
   });
 }
 
+function buildGridLead() {
+  const gLead = document.getElementById('gridLead');
+  for (let r = N_ROWS_LEAD - 1; r >= 0; r--) {
+    const lab = document.createElement('div');
+    lab.className = 'row-label bass-label';
+    const tag = document.createElement('span');
+    tag.className = 'pitch-tag';
+    tag.dataset.leadRow = String(r);
+    tag.textContent = rowLeadLabel(r);
+    lab.appendChild(tag);
+    gLead.appendChild(lab);
+
+    for (let s = 0; s < N_STEPS; s++) {
+      const c = document.createElement('div');
+      c.className = 'cell ' + groupClass(s);
+      c.dataset.row = String(r);
+      c.dataset.s = String(s);
+      gLead.appendChild(c);
+      cellsLead[r][s] = c;
+    }
+  }
+
+  const onTap = (ev) => {
+    const t = ev.target;
+    if (!t.classList.contains('cell')) return;
+    ev.preventDefault();
+    const r = parseInt(t.dataset.row, 10);
+    const s = parseInt(t.dataset.s, 10);
+    let res;
+    if (options.snapNotes !== 'off') {
+      res = cycleCellOnLead(pendingPatternLead, r, s);
+    } else {
+      res = cycleCellOnLead(patternLead, r, s);
+      pendingPatternLead[pIdxLead(r, s)] = patternLead[pIdxLead(r, s)];
+      for (const cr of res.cleared) pendingPatternLead[pIdxLead(cr, s)] = 0;
+    }
+    renderCellLead(r, s);
+    for (const cr of res.cleared) renderCellLead(cr, s);
+    recomputeHasPending();
+  };
+  gLead.addEventListener('touchstart', onTap, { passive: false });
+  gLead.addEventListener('mousedown', onTap);
+}
+
+function renderCellLead(row, s) {
+  const el = cellsLead[row][s];
+  if (!el) return;
+  const state = pendingPatternLead[pIdxLead(row, s)];
+  el.classList.remove('on', 'accent');
+  if (state === 1) el.classList.add('on');
+  el.classList.toggle('pending', cellPendingLead(row, s));
+}
+
+function relabelLeadRows() {
+  document.querySelectorAll('.pitch-tag[data-lead-row]').forEach(tag => {
+    const r = parseInt(tag.dataset.leadRow, 10);
+    tag.textContent = rowLeadLabel(r);
+  });
+}
+
 function groupClass(s) {
   const g = Math.floor(s / 4);
   return ['grp-a','grp-b','grp-c','grp-d'][g];
@@ -2361,14 +2541,17 @@ function refreshMSButtons(v) {
 }
 
 function commitNotesOnly() {
-  let changed808 = false, changed303 = false;
+  let changed808 = false, changed303 = false, changedLead = false;
   for (let i = 0; i < pattern.length; i++) {
     if (pendingPattern[i] !== pattern[i]) { changed808 = true; break; }
   }
   for (let i = 0; i < pattern303.length; i++) {
     if (pendingPattern303[i] !== pattern303[i]) { changed303 = true; break; }
   }
-  if (!changed808 && !changed303) return;
+  for (let i = 0; i < patternLead.length; i++) {
+    if (pendingPatternLead[i] !== patternLead[i]) { changedLead = true; break; }
+  }
+  if (!changed808 && !changed303 && !changedLead) return;
   if (changed808) {
     pattern.set(pendingPattern);
     for (let v = 0; v < N_VOICES; v++)
@@ -2378,6 +2561,11 @@ function commitNotesOnly() {
     pattern303.set(pendingPattern303);
     for (let r = 0; r < N_ROWS_303; r++)
       for (let s = 0; s < N_STEPS; s++) renderCell303(r, s);
+  }
+  if (changedLead) {
+    patternLead.set(pendingPatternLead);
+    for (let r = 0; r < N_ROWS_LEAD; r++)
+      for (let s = 0; s < N_STEPS; s++) renderCellLead(r, s);
   }
   recomputeHasPending();
 }
@@ -2438,17 +2626,23 @@ function clearAllNotes() {
   if (options.snapNotes !== 'off') {
     pendingPattern.fill(0);
     pendingPattern303.fill(0);
+    pendingPatternLead.fill(0);
   } else {
     pattern.fill(0);
     pendingPattern.fill(0);
     pattern303.fill(0);
     pendingPattern303.fill(0);
+    patternLead.fill(0);
+    pendingPatternLead.fill(0);
   }
   for (let v = 0; v < N_VOICES; v++) {
     for (let s = 0; s < N_STEPS; s++) renderCell(v, s);
   }
   for (let r = 0; r < N_ROWS_303; r++) {
     for (let s = 0; s < N_STEPS; s++) renderCell303(r, s);
+  }
+  for (let r = 0; r < N_ROWS_LEAD; r++) {
+    for (let s = 0; s < N_STEPS; s++) renderCellLead(r, s);
   }
   recomputeHasPending();
 }
@@ -2640,12 +2834,18 @@ function renderLoop() {
         for (let r = 0; r < N_ROWS_303; r++) {
           if (cells303[r][lastColStep]) cells303[r][lastColStep].classList.remove('cur');
         }
+        for (let r = 0; r < N_ROWS_LEAD; r++) {
+          if (cellsLead[r][lastColStep]) cellsLead[r][lastColStep].classList.remove('cur');
+        }
       }
       for (let v = 0; v < N_VOICES; v++) {
         cells[v][colStep].classList.add('cur');
       }
       for (let r = 0; r < N_ROWS_303; r++) {
         if (cells303[r][colStep]) cells303[r][colStep].classList.add('cur');
+      }
+      for (let r = 0; r < N_ROWS_LEAD; r++) {
+        if (cellsLead[r][colStep]) cellsLead[r][colStep].classList.add('cur');
       }
       lastColStep = colStep;
     }
@@ -2864,6 +3064,7 @@ function initOptions() {
     b.addEventListener('click', () => {
       options.bassKey = k;
       relabelBassRows();
+      relabelLeadRows();
       refreshOptionsUI();
     });
     keyRow.appendChild(b);
@@ -2872,6 +3073,7 @@ function initOptions() {
     btn.addEventListener('click', () => {
       options.bassMode = btn.dataset.bassMode;
       relabelBassRows();
+      relabelLeadRows();
       refreshOptionsUI();
     });
   });
@@ -2893,6 +3095,7 @@ function initOptions() {
     b.textContent = k === 'sync' ? 'Sync' : k;
     b.addEventListener('click', () => {
       options.leadKey = k;
+      relabelLeadRows();
       refreshOptionsUI();
     });
     leadKeyRow.appendChild(b);
@@ -2900,6 +3103,7 @@ function initOptions() {
   document.querySelectorAll('[data-lead-mode]').forEach(btn => {
     btn.addEventListener('click', () => {
       options.leadMode = btn.dataset.leadMode;
+      relabelLeadRows();
       refreshOptionsUI();
     });
   });
@@ -2932,6 +3136,7 @@ function initOptions() {
     applyDelayFromOptions();
     if (master) master.setReso(options.resonance);
     relabelBassRows();
+    relabelLeadRows();
     refreshOptionsUI();
   });
 
@@ -2980,6 +3185,7 @@ function bindAckFeedback() {
 
 buildUI();
 buildGrid303();
+buildGridLead();
 bindTransport();
 const applyFX = bindFX();
 bindBoot(applyFX);
