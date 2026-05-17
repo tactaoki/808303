@@ -645,6 +645,25 @@ input.display:focus {
   transition: background 60ms ease-out, color 60ms ease-out, transform 60ms ease-out;
 }
 .options-overlay .opt-row .btn { flex: 1 1 auto; min-width: 56px; }
+/* Bass key picker: clean 2 rows × 6 columns. */
+.options-overlay #bassKeyRow {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 5px;
+}
+.options-overlay #bassKeyRow .btn { flex: none; min-width: 0; min-height: 32px; padding: 6px 4px; }
+/* Snap grid: one row per category, four mode pills + leading label. */
+.options-overlay .snap-grid { display: grid; gap: 4px; }
+.options-overlay .snap-row {
+  display: grid;
+  grid-template-columns: clamp(72px, 12vw, 96px) repeat(4, 1fr);
+  gap: 5px; align-items: center;
+}
+.options-overlay .snap-cat-label {
+  font-size: 11px; color: #8c8c92; letter-spacing: .04em;
+  font-weight: 500;
+}
+.options-overlay .snap-row .btn { flex: none; min-width: 0; padding: 6px 4px; }
 .options-overlay .btn:hover  { background: #34343a; }
 .options-overlay .btn:active { background: #15151a; transform: translateY(1px); }
 .options-overlay .btn.active {
@@ -955,12 +974,8 @@ input.display:focus {
 
     <section class="opt-section">
       <div class="opt-label">SNAP TO LOOP START</div>
-      <div class="opt-row">
-        <button class="btn ctrl snap-pill" data-snap="Notes">Notes</button>
-        <button class="btn ctrl snap-pill" data-snap="Tracks">Tracks</button>
-        <button class="btn ctrl snap-pill" data-snap="Effects">Effects</button>
-      </div>
-      <div class="opt-hint">When on, edits in that category apply at the next bar; otherwise immediately.</div>
+      <div class="snap-grid" id="snapGrid"></div>
+      <div class="opt-hint">Off = immediate · Loop = bar start · Half = half-bar · Qtr = each beat.</div>
     </section>
 
     <footer class="opt-foot">
@@ -1092,8 +1107,29 @@ const N_STEPS  = 16;
 let ctx = null;
 let master = null;     // master bus object
 let voices = null;     // { bd, sd, ch, oh, cp, cb, cy }
+let trackChannels = null;  // per-voice + bass balance channels (comp + lim)
 let workletReady = false;
 let workletSupported = true;
+
+/* Per-track balancing chain. Lightly tames peaks so different drums and the
+   bass synth sit at similar levels going into the master bus. Not exposed
+   in the UI — purely an internal "even out the grain" stage. */
+function makeBalanceChannel(ctx, dest) {
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -16;   // start compressing well below clip
+  comp.knee.value      = 8;     // soft knee for transparency
+  comp.ratio.value     = 2.5;   // gentle ratio
+  comp.attack.value    = 0.004; // fast enough to catch percussive transients
+  comp.release.value   = 0.18;  // smooth release
+  const lim = ctx.createDynamicsCompressor();
+  lim.threshold.value  = -2;    // brick-wall just under 0 dBFS
+  lim.knee.value       = 0;
+  lim.ratio.value      = 20;
+  lim.attack.value     = 0.0008;
+  lim.release.value    = 0.06;
+  comp.connect(lim).connect(dest);
+  return comp;   // voice nodes connect here
+}
 
 async function ensureAudio() {
   if (!ctx) {
@@ -1114,7 +1150,20 @@ async function ensureAudio() {
       }
     }
     master = buildMasterBus(ctx);
-    voices = createVoices(ctx, master.input);
+    // Per-track comp + limiter for natural peak control. Internal-only; no
+    // UI. Each drum voice and the 303 bass get their own light dynamics
+    // stage before feeding the shared master bus.
+    trackChannels = {
+      bd:   makeBalanceChannel(ctx, master.input),
+      sd:   makeBalanceChannel(ctx, master.input),
+      ch:   makeBalanceChannel(ctx, master.input),
+      oh:   makeBalanceChannel(ctx, master.input),
+      cp:   makeBalanceChannel(ctx, master.input),
+      cb:   makeBalanceChannel(ctx, master.input),
+      cy:   makeBalanceChannel(ctx, master.input),
+      bass: makeBalanceChannel(ctx, master.input),
+    };
+    voices = createVoices(ctx, trackChannels);
     master.setReso(options.resonance);
     master.setDelayTime(delaySecondsFromOptions(bpm));
     window.__rhythmMachine = { ctx, master, voices };
@@ -1301,7 +1350,7 @@ function makeIR(ctx, durSec, erEnd) {
 
 /* ---------------- voices ---------------- */
 
-function createVoices(ctx, dest) {
+function createVoices(ctx, channels) {
   // shared metal cluster periodic wave (band-limited)
   const metalFreqs = [205, 304, 369, 522, 540, 800];
   const baseHz = 100; // reference for PeriodicWave construction
@@ -1337,6 +1386,7 @@ function createVoices(ctx, dest) {
 
   // ------- BD -------
   function bd(time, accent) {
+    const dest = channels.bd;
     const peak = accent ? 1.3 : 0.95;
     const osc = ctx.createOscillator(); osc.type = 'sine';
     osc.frequency.setValueAtTime(150, time);
@@ -1356,6 +1406,7 @@ function createVoices(ctx, dest) {
 
   // ------- SD -------
   function sd(time, accent) {
+    const dest = channels.sd;
     const peak = accent ? 1.0 : 0.7;
     // two-tone tom (180Hz + 330Hz triangles)
     const t1 = ctx.createOscillator(); t1.type = 'triangle'; t1.frequency.value = 180;
@@ -1398,6 +1449,7 @@ function createVoices(ctx, dest) {
   // CH/OH choke: keep track of currently scheduled OH so CH can cancel it
   let pendingOH = null;
   function ch(time, accent) {
+    const dest = channels.ch;
     const peak = accent ? 1.0 : 0.7;
     const env = metalCluster(time, 0.06, peak, 7000, 8000, 1.2);
     env.connect(dest);
@@ -1412,6 +1464,7 @@ function createVoices(ctx, dest) {
     }
   }
   function oh(time, accent) {
+    const dest = channels.oh;
     const peak = accent ? 0.95 : 0.65;
     const env = metalCluster(time, 2.2, peak, 7000, 8000, 1.0);
     env.connect(dest);
@@ -1420,6 +1473,7 @@ function createVoices(ctx, dest) {
 
   // ------- CP -------
   function cp(time, accent) {
+    const dest = channels.cp;
     const peak = accent ? 1.1 : 0.85;
     const bursts = [0.0, 0.012, 0.024];
     for (const off of bursts) {
@@ -1441,6 +1495,7 @@ function createVoices(ctx, dest) {
 
   // ------- CB -------
   function cb(time, accent) {
+    const dest = channels.cb;
     const peak = accent ? 1.0 : 0.7;
     const a = ctx.createOscillator(); a.type = 'square'; a.frequency.value = 540;
     const b = ctx.createOscillator(); b.type = 'square'; b.frequency.value = 800;
@@ -1456,6 +1511,7 @@ function createVoices(ctx, dest) {
 
   // ------- CY -------
   function cy(time, accent) {
+    const dest = channels.cy;
     const peak = accent ? 0.85 : 0.6;
     const env = metalCluster(time, 1.4, peak, 5000, 7200, 0.9);
     // extra HP
@@ -1498,7 +1554,13 @@ const pendingPattern303 = new Uint8Array(N_ROWS_303 * N_STEPS);
 
 const PENTA_MINOR = [0, 3, 5, 7, 10];   // 1, b3, 4, 5, b7
 const PENTA_MAJOR = [0, 2, 4, 7, 9];    // 1, 2, 3, 5, 6
+// Chromatic ordering — used for pitch math and the row303Label lookup
+// (KEYS[semitone] → name). Keep this in chromatic order.
 const KEYS = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+// UI display order — the user wants the picker to start at E and ascend,
+// ending at D#. Pitch math is unaffected because KEY_SEMI still maps each
+// name to its chromatic semitone.
+const KEYS_LAYOUT = ['E','F','F#','G','G#','A','A#','B','C','C#','D','D#'];
 const KEY_SEMI = Object.fromEntries(KEYS.map((k, i) => [k, i]));
 
 function row303Midi(row) {
@@ -1516,15 +1578,30 @@ function row303Label(row) {
 }
 
 /* ----- Options (driven by the Options overlay) ----- */
+// Snap modes: each commit category can be set to one of these. 'off' applies
+// instantly; the others wait until the sequencer crosses a step boundary
+// that matches the chosen subdivision.
+const SNAP_MODES = ['off', 'loop', 'half', 'quarter'];
+const SNAP_LABELS = { off: 'Off', loop: 'Loop', half: 'Half', quarter: 'Qtr' };
+function isSnapCommitStep(mode, step) {
+  switch (mode) {
+    case 'loop':    return step === 0;
+    case 'half':    return step === 0 || step === 8;
+    case 'quarter': return step % 4 === 0;
+    default: return false;   // 'off' — never queued, so never commits via this path
+  }
+}
+
 const DEFAULTS = {
   delayDenom: 8, delayDotted: true,
   resonance: 0.5,
-  // Snap-to-loop-start is set per category. Notes & Tracks default to
-  // snap=on for musical-bar editing; Effects default to snap=off so
-  // sweeps and filter twiddles feel responsive.
-  snapNotes: true,
-  snapTracks: true,
-  snapEffects: false,
+  // Per-category snap. Notes / Tracks default to "Loop" (musical bar edits),
+  // Effects sliders are "Off" so sweeps feel responsive, and the FX Reset
+  // button defaults to "Off" so it acts as an immediate panic control.
+  snapNotes:        'loop',
+  snapTracks:       'loop',
+  snapEffects:      'off',
+  snapEffectsReset: 'off',
   // Bass synth (303 view)
   bassKey: 'A',
   bassMode: 'minor',
@@ -1537,6 +1614,11 @@ const FX_NAMES = ['drive','cutoff','delay','reverb'];
 const FX_DEFAULTS = { drive: 0, cutoff: 1000, delay: 0, reverb: 0 };  // slider scale 0..1000
 const liveFx    = { ...FX_DEFAULTS };
 const pendingFx = { ...FX_DEFAULTS };
+// Per-effect snap-mode capture: when a pending change is queued by either
+// the slider or the reset button, we remember WHICH snap mode that change
+// is waiting on. This lets sliders and reset have independent snap modes.
+// `null` means no pending change for this effect.
+const pendingFxMode = { drive: null, cutoff: null, delay: null, reverb: null };
 const FX_ELEMENTS = {};   // populated by bindFX()
 
 function delaySecondsFromOptions(bpmVal) {
@@ -1756,7 +1838,7 @@ function schedule303(sourceStep, realStep, time) {
   amp.gain.linearRampToValueAtTime(peak, time + 0.002);
   // No release scheduled yet — release is set when the phrase actually ends.
 
-  osc.connect(filt).connect(amp).connect(master.input);
+  osc.connect(filt).connect(amp).connect(trackChannels ? trackChannels.bass : master.input);
   osc.start(time);
   // Safety stop far in the future. Web Audio's osc.stop() can only be set
   // once (re-calling is a no-op); the audible end is controlled by the amp
@@ -1791,9 +1873,16 @@ function scheduleStep(step, time) {
 
 function scheduler() {
   while (nextNoteTime < ctx.currentTime + SCHEDULE_AHEAD) {
-    // Snap-to-loop-start: commit pending edits right before step 0 plays,
-    // so the first beat of the bar already reflects the user's changes.
-    if (currentStep === 0 && hasPending) commitPending();
+    // Commit pending edits per category whose snap mode matches the step
+    // boundary we're about to schedule. 'off' never queues; only loop /
+    // half / quarter contribute pending state.
+    if (hasPending) {
+      if (isSnapCommitStep(options.snapNotes,  currentStep)) commitNotesOnly();
+      if (isSnapCommitStep(options.snapTracks, currentStep)) commitTracksOnly();
+      // Effects: each pending change carries its OWN mode (slider vs reset
+      // can use different modes), so per-effect lookup handles both sources.
+      maybeCommitFxAtStep(currentStep);
+    }
     scheduleStep(currentStep, nextNoteTime);
     nextNoteTime += step16Duration();
     currentStep = (currentStep + 1) % N_STEPS;
@@ -1941,7 +2030,7 @@ function buildUI() {
     const v = parseInt(t.dataset.v, 10);
     const s = parseInt(t.dataset.s, 10);
     let res;
-    if (options.snapNotes) {
+    if (options.snapNotes !== 'off') {
       // Edit the pending pattern only; audio keeps using live pattern.
       res = cycleCellOn(pendingPattern, v, s);
     } else {
@@ -1964,7 +2053,7 @@ function buildUI() {
     const t = ev.target;
     if (!t.dataset || !t.dataset.act) return;
     const v = parseInt(t.dataset.v, 10);
-    if (options.snapTracks) {
+    if (options.snapTracks !== 'off') {
       if (t.dataset.act === 'm') pendingMuted[v]  = !pendingMuted[v];
       else                       pendingSoloed[v] = !pendingSoloed[v];
     } else {
@@ -1972,7 +2061,7 @@ function buildUI() {
       else                       { soloed[v] = !soloed[v]; pendingSoloed[v] = soloed[v]; }
     }
     refreshMSButtons(v);
-    if (!options.snapTracks) applyRowDim();
+    if (options.snapTracks === 'off') applyRowDim();
     recomputeHasPending();
   });
 }
@@ -2011,7 +2100,7 @@ function buildGrid303() {
     const r = parseInt(t.dataset.row, 10);
     const s = parseInt(t.dataset.s, 10);
     let res;
-    if (options.snapNotes) {
+    if (options.snapNotes !== 'off') {
       res = cycleCellOn303(pendingPattern303, r, s);
     } else {
       res = cycleCellOn303(pattern303, r, s);
@@ -2110,6 +2199,27 @@ function commitFxOnly() {
       if (master) applyFxToAudio(name, liveFx[name]);
       changed = true;
     }
+    pendingFxMode[name] = null;
+  }
+  if (changed) { updateAllFxPendingMarkers(); recomputeHasPending(); }
+}
+
+// Step-driven partial FX commit: each pending effect is committed only when
+// the sequencer crosses a step boundary matching the mode it was queued at.
+// This is how slider and reset snap stay independent — each one stamps its
+// own commit-mode into pendingFxMode[name] when the change is queued.
+function maybeCommitFxAtStep(currentStep) {
+  let changed = false;
+  for (const name of FX_NAMES) {
+    const mode = pendingFxMode[name];
+    if (!mode) continue;
+    if (!isSnapCommitStep(mode, currentStep)) continue;
+    if (pendingFx[name] !== liveFx[name]) {
+      liveFx[name] = pendingFx[name];
+      if (master) applyFxToAudio(name, liveFx[name]);
+      changed = true;
+    }
+    pendingFxMode[name] = null;
   }
   if (changed) { updateAllFxPendingMarkers(); recomputeHasPending(); }
 }
@@ -2121,7 +2231,7 @@ function commitPending() {
 }
 
 function clearAllNotes() {
-  if (options.snapNotes) {
+  if (options.snapNotes !== 'off') {
     pendingPattern.fill(0);
     pendingPattern303.fill(0);
   } else {
@@ -2234,24 +2344,32 @@ function updateAllFxPendingMarkers() {
 
 function onFxInput(name, sliderValue) {
   pendingFx[name] = sliderValue;
-  if (!options.snapEffects) {
+  if (options.snapEffects === 'off') {
     liveFx[name] = sliderValue;
+    pendingFxMode[name] = null;
     applyFxToAudio(name, sliderValue);
+  } else {
+    pendingFxMode[name] = options.snapEffects;
   }
   updateFxPendingMarker(name);
   recomputeHasPending();
 }
 
 function resetFx(name) {
-  // Immediate — bypasses snap deliberately so the reset acts as a panic
-  // button. Doesn't touch DEFAULTS / options; only this slider's live and
-  // pending positions are restored.
+  // Reset uses its own snap setting, independent of slider snap. The slider
+  // visual snaps to the default value immediately so the user sees the
+  // intent; audio applies according to snapEffectsReset.
   const def = FX_DEFAULTS[name];
   const el  = FX_ELEMENTS[name];
   if (el) el.value = String(def);
   pendingFx[name] = def;
-  liveFx[name]    = def;
-  applyFxToAudio(name, def);
+  if (options.snapEffectsReset === 'off') {
+    liveFx[name] = def;
+    pendingFxMode[name] = null;
+    applyFxToAudio(name, def);
+  } else {
+    pendingFxMode[name] = options.snapEffectsReset;
+  }
   updateFxPendingMarker(name);
   recomputeHasPending();
 }
@@ -2378,32 +2496,52 @@ function pickDelay(denom, dotted) {
 // off→on: re-sync this category's pending mirror to live (no spurious
 // pending state). on→off: commit only this category's pending edits so
 // they don't get stranded.
-function toggleSnap(cat) {
+// Set the snap mode for a category. Switching INTO 'off' commits any
+// pending changes in that category immediately, so edits aren't stranded.
+// Switching OUT of 'off' into a snap mode is a no-op — future edits will
+// be queued; nothing in flight gets disturbed.
+function setSnap(cat, mode) {
   const key = 'snap' + cat;
-  const next = !options[key];
-  if (options[key] && !next) {
-    if      (cat === 'Notes')   commitNotesOnly();
-    else if (cat === 'Tracks')  commitTracksOnly();
-    else if (cat === 'Effects') commitFxOnly();
-  } else if (!options[key] && next) {
-    if (cat === 'Notes') {
-      pendingPattern.set(pattern);
-      for (let v = 0; v < N_VOICES; v++)
-        for (let s = 0; s < N_STEPS; s++) renderCell(v, s);
-    } else if (cat === 'Tracks') {
-      for (let v = 0; v < N_VOICES; v++) {
-        pendingMuted[v]  = muted[v];
-        pendingSoloed[v] = soloed[v];
-        refreshMSButtons(v);
-      }
-    } else if (cat === 'Effects') {
-      for (const n of FX_NAMES) pendingFx[n] = liveFx[n];
-      updateAllFxPendingMarkers();
-    }
-    recomputeHasPending();
+  if (options[key] === mode) return;
+  const wasOff = options[key] === 'off';
+  options[key] = mode;
+  if (!wasOff && mode === 'off') {
+    if      (cat === 'Notes')        commitNotesOnly();
+    else if (cat === 'Tracks')       commitTracksOnly();
+    else if (cat === 'Effects')      commitFxOnly();
+    else if (cat === 'EffectsReset') commitFxOnly();
   }
-  options[key] = next;
   refreshSnapUI();
+}
+
+const SNAP_CATEGORIES = [
+  { cat: 'Notes',        label: 'Notes' },
+  { cat: 'Tracks',       label: 'Tracks' },
+  { cat: 'Effects',      label: 'FX Slider' },
+  { cat: 'EffectsReset', label: 'FX Reset' },
+];
+
+function buildSnapGrid() {
+  const grid = document.getElementById('snapGrid');
+  if (!grid) return;
+  SNAP_CATEGORIES.forEach(({ cat, label }) => {
+    const row = document.createElement('div');
+    row.className = 'snap-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'snap-cat-label';
+    lbl.textContent = label;
+    row.appendChild(lbl);
+    SNAP_MODES.forEach(mode => {
+      const b = document.createElement('button');
+      b.className = 'btn ctrl snap-pill';
+      b.dataset.snap = cat;
+      b.dataset.val  = mode;
+      b.textContent  = SNAP_LABELS[mode];
+      b.addEventListener('click', () => setSnap(cat, mode));
+      row.appendChild(b);
+    });
+    grid.appendChild(row);
+  });
 }
 
 function refreshDelayUI() {
@@ -2417,10 +2555,10 @@ function refreshDelayUI() {
   document.getElementById('delayActiveLbl').textContent = spec ? spec.label : '?';
 }
 function refreshSnapUI() {
-  for (const cat of ['Notes','Tracks','Effects']) {
-    const btn = document.querySelector(`.snap-pill[data-snap="${cat}"]`);
-    if (btn) btn.classList.toggle('active', !!options['snap' + cat]);
-  }
+  document.querySelectorAll('.snap-pill').forEach(btn => {
+    btn.classList.toggle('active',
+      options['snap' + btn.dataset.snap] === btn.dataset.val);
+  });
 }
 function refreshBassUI() {
   document.querySelectorAll('#bassKeyRow .btn').forEach(btn => {
@@ -2467,13 +2605,11 @@ function initOptions() {
     if (master) master.setReso(options.resonance);
   });
 
-  document.querySelectorAll('.snap-pill').forEach(btn => {
-    btn.addEventListener('click', () => toggleSnap(btn.dataset.snap));
-  });
+  buildSnapGrid();
 
   // Bass synth — Key buttons
   const keyRow = document.getElementById('bassKeyRow');
-  KEYS.forEach(k => {
+  KEYS_LAYOUT.forEach(k => {
     const b = document.createElement('button');
     b.className = 'btn ctrl';
     b.dataset.key = k;
