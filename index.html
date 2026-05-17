@@ -1040,9 +1040,77 @@ input.display:focus {
     </section>
 
     <section class="opt-section">
-      <div class="opt-label">LEAD · LFO RATE</div>
+      <div class="opt-label">LEAD · WAVE</div>
+      <div class="opt-row">
+        <button class="btn ctrl" data-lead-wave="sine">Sine</button>
+        <button class="btn ctrl" data-lead-wave="triangle">Triangle</button>
+        <button class="btn ctrl" data-lead-wave="square">Square</button>
+        <button class="btn ctrl" data-lead-wave="sawtooth">Saw</button>
+      </div>
+
+      <div class="opt-label" style="margin-top:8px">LEAD · SUB INTERVAL</div>
+      <div class="opt-row" id="leadSubRow"></div>
+
+      <div class="opt-label" style="margin-top:8px">LEAD · LEVELS</div>
+      <div class="slider opt-slider">
+        <div class="lbl">Main</div>
+        <input type="range" min="0" max="1000" value="800" id="optLeadMain">
+        <div class="lbl rt" id="optLeadMainVal">80</div>
+      </div>
+      <div class="slider opt-slider" style="margin-top:4px">
+        <div class="lbl">Sub</div>
+        <input type="range" min="0" max="1000" value="500" id="optLeadSubLvl">
+        <div class="lbl rt" id="optLeadSubLvlVal">50</div>
+      </div>
+      <div class="slider opt-slider" style="margin-top:4px">
+        <div class="lbl">Noise</div>
+        <input type="range" min="0" max="1000" value="0" id="optLeadNoise">
+        <div class="lbl rt" id="optLeadNoiseVal">0</div>
+      </div>
+
+      <div class="opt-label" style="margin-top:8px">LEAD · FILTER</div>
+      <div class="slider opt-slider">
+        <div class="lbl">Cutoff</div>
+        <input type="range" min="0" max="1000" value="660" id="optLeadCutoff">
+        <div class="lbl rt" id="optLeadCutoffVal">2.0k</div>
+      </div>
+      <div class="slider opt-slider" style="margin-top:4px">
+        <div class="lbl">Reso</div>
+        <input type="range" min="0" max="1000" value="304" id="optLeadReso">
+        <div class="lbl rt" id="optLeadResoVal">4.0</div>
+      </div>
+      <div class="slider opt-slider" style="margin-top:4px">
+        <div class="lbl">Env →F</div>
+        <input type="range" min="0" max="1000" value="750" id="optLeadEnvAmt">
+        <div class="lbl rt" id="optLeadEnvAmtVal">+50</div>
+      </div>
+
+      <div class="opt-label" style="margin-top:8px">LEAD · AMP ENV</div>
+      <div class="slider opt-slider">
+        <div class="lbl">Attack</div>
+        <input type="range" min="0" max="1000" value="20" id="optLeadA">
+        <div class="lbl rt" id="optLeadAVal">5ms</div>
+      </div>
+      <div class="slider opt-slider" style="margin-top:4px">
+        <div class="lbl">Decay</div>
+        <input type="range" min="0" max="1000" value="177" id="optLeadD">
+        <div class="lbl rt" id="optLeadDVal">150ms</div>
+      </div>
+      <div class="slider opt-slider" style="margin-top:4px">
+        <div class="lbl">Sustain</div>
+        <input type="range" min="0" max="1000" value="500" id="optLeadS">
+        <div class="lbl rt" id="optLeadSVal">.50</div>
+      </div>
+      <div class="slider opt-slider" style="margin-top:4px">
+        <div class="lbl">Release</div>
+        <input type="range" min="0" max="1000" value="161" id="optLeadR">
+        <div class="lbl rt" id="optLeadRVal">250ms</div>
+      </div>
+
+      <div class="opt-label" style="margin-top:8px">LEAD · LFO RATE</div>
       <div class="opt-row" id="leadLfoDenomRow"></div>
       <div class="opt-row" id="leadLfoDottedRow"></div>
+
       <div class="opt-label" style="margin-top:8px">LEAD · PORTAMENTO</div>
       <div class="opt-row">
         <button class="btn ctrl" data-lead-porta="off">Off</button>
@@ -1213,10 +1281,8 @@ function makeBassChannel(ctx, dest) {
 }
 
 function makeLeadChannel(ctx, dest) {
-  // Raw saw is loud and harmonically dense — keep the channel headroom low
-  // until Commit 3 adds the filter. Amp envelope still rides 0..1 internally.
   const input = ctx.createGain();
-  input.gain.value = 0.35;
+  input.gain.value = 0.50;
   input.connect(dest);
   return input;
 }
@@ -1739,9 +1805,22 @@ const DEFAULTS = {
   // Bass synth (303 view) — wave is per-voice.
   bassWave: 'sawtooth',     // sawtooth is the iconic 303 voice
   // Lead synth (LEAD view).
-  leadLfoDenom:  8,
-  leadLfoDotted: false,
-  leadPorta:     'off',
+  leadWave:       'sawtooth',
+  leadMainLevel:  0.80,
+  leadSub:        'off',                  // off | -1oct | -5th | unison | +5th | +1oct
+  leadSubWave:    'square',
+  leadSubLevel:   0.50,
+  leadNoiseLevel: 0.00,
+  leadCutoff:     2000,                   // Hz (80–12000)
+  leadResonance:  4,                      // 0.5–12
+  leadEnvAmt:     0.50,                   // -1.0..+1.0 (env → filter)
+  leadAttack:     0.005,                  // sec
+  leadDecay:      0.150,                  // sec
+  leadSustain:    0.5,                    // 0..1
+  leadRelease:    0.250,                  // sec
+  leadLfoDenom:   8,
+  leadLfoDotted:  false,
+  leadPorta:      'off',
   // FILL IN repeat rate: 4 = quarter, 8 = 8th, 16 = 16th notes
   fillRate: 16,
 };
@@ -2099,21 +2178,135 @@ function schedule303(sourceStep, realStep, time) {
    Minimal Commit 2 voice: one persistent saw + amp ADSR. Held active across
    cells so each row-on cell retriggers the envelope and updates pitch. */
 let liveLead = null;
-const LEAD_ATTACK  = 0.005;
-const LEAD_DECAY   = 0.150;
-const LEAD_SUSTAIN = 0.5;
-const LEAD_RELEASE = 0.250;
+let LEAD_NOISE_BUF = null;
+const LEAD_PORTA_SEC = 0.060;
+const LEAD_HZ_MIN = 20;
+const LEAD_HZ_MAX = 18000;
+const LEAD_ENV_OCT_RANGE = 4;  // env amt ±1.0 sweeps ±4 octaves of cutoff
+
+const LEAD_SUB_RATIO = {
+  'off':     1,
+  '-1oct':   0.5,
+  '-5th':    Math.pow(2, -7/12),
+  'unison':  Math.pow(2,  7/1200),  // +7 cents detune
+  '+5th':    Math.pow(2,  7/12),
+  '+1oct':   2,
+};
+const LEAD_SUB_LABEL = {
+  'off':    'Off',
+  '-1oct':  '-1oct',
+  '-5th':   '-5th',
+  'unison': 'Unison',
+  '+5th':   '+5th',
+  '+1oct':  '+1oct',
+};
+const LEAD_SUB_ORDER = ['off', '-1oct', '-5th', 'unison', '+5th', '+1oct'];
+
+// Slider (0..1000) ↔ patch value mappings. Cutoff is log; the rest linear.
+const CUTOFF_MIN = 80, CUTOFF_MAX = 12000;
+const CUTOFF_RATIO = CUTOFF_MAX / CUTOFF_MIN;
+const sliderToCutoffHz = v => CUTOFF_MIN * Math.pow(CUTOFF_RATIO, v / 1000);
+const cutoffHzToSlider = hz => Math.round(Math.log(hz / CUTOFF_MIN) / Math.log(CUTOFF_RATIO) * 1000);
+const sliderToReso     = v  => 0.5 + (v / 1000) * 11.5;
+const resoToSlider     = q  => Math.round((q - 0.5) / 11.5 * 1000);
+const sliderToEnvAmt   = v  => (v - 500) / 500;
+const envAmtToSlider   = a  => Math.round(a * 500 + 500);
+const sliderToAttack   = v  => 0.001 + (v / 1000) * 0.199;
+const attackToSlider   = s  => Math.round((s - 0.001) / 0.199 * 1000);
+const sliderToDecay    = v  => 0.010 + (v / 1000) * 0.790;
+const decayToSlider    = s  => Math.round((s - 0.010) / 0.790 * 1000);
+const sliderToSustain  = v  => v / 1000;
+const sustainToSlider  = s  => Math.round(s * 1000);
+const sliderToRelease  = v  => 0.010 + (v / 1000) * 1.490;
+const releaseToSlider  = s  => Math.round((s - 0.010) / 1.490 * 1000);
+
+const fmtHz = (hz) => hz >= 1000 ? (hz / 1000).toFixed(1) + 'k' : Math.round(hz).toString();
+const fmtMs = (s)  => Math.round(s * 1000) + 'ms';
+const fmtPct = (v) => Math.round(v * 100).toString();
+const fmtSignedPct = (v) => (v >= 0 ? '+' : '') + Math.round(v * 100);
+
+function ensureLeadNoiseBuf() {
+  if (LEAD_NOISE_BUF || !ctx) return;
+  const len = Math.floor(ctx.sampleRate * 2);
+  const b = ctx.createBuffer(1, len, ctx.sampleRate);
+  const d = b.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  LEAD_NOISE_BUF = b;
+}
 
 function ensureLeadVoice() {
   if (liveLead || !ctx || !trackChannels || !trackChannels.lead) return;
-  const osc = ctx.createOscillator();
-  osc.type = 'sawtooth';
-  osc.frequency.value = 220;
+  ensureLeadNoiseBuf();
+
+  // --- Oscillators ---
+  const oscMain = ctx.createOscillator();
+  oscMain.type = options.leadWave;
+  oscMain.frequency.value = 220;
+  const mainGain = ctx.createGain();
+  mainGain.gain.value = options.leadMainLevel;
+  oscMain.connect(mainGain);
+
+  const oscSub = ctx.createOscillator();
+  oscSub.type = options.leadSubWave;
+  oscSub.frequency.value = 220;
+  const subGain = ctx.createGain();
+  subGain.gain.value = (options.leadSub === 'off') ? 0 : options.leadSubLevel;
+  oscSub.connect(subGain);
+
+  const noiseSrc = ctx.createBufferSource();
+  noiseSrc.buffer = LEAD_NOISE_BUF;
+  noiseSrc.loop = true;
+  const noiseGain = ctx.createGain();
+  noiseGain.gain.value = options.leadNoiseLevel;
+  noiseSrc.connect(noiseGain);
+
+  // --- Mix + soft saturation + 24dB LP cascade ---
+  const mix = ctx.createGain();
+  mix.gain.value = 1.0;
+  mainGain.connect(mix);
+  subGain.connect(mix);
+  noiseGain.connect(mix);
+
+  const shaper = ctx.createWaveShaper();
+  shaper.curve = BASS_DRIVE_CURVE;
+  shaper.oversample = '2x';
+
+  const lp1 = ctx.createBiquadFilter();
+  lp1.type = 'lowpass';
+  lp1.frequency.value = options.leadCutoff;
+  lp1.Q.value = options.leadResonance;
+  const lp2 = ctx.createBiquadFilter();
+  lp2.type = 'lowpass';
+  lp2.frequency.value = options.leadCutoff;
+  lp2.Q.value = 0.707;
+
   const amp = ctx.createGain();
   amp.gain.value = 0;
-  osc.connect(amp).connect(trackChannels.lead);
-  osc.start();
-  liveLead = { osc, amp, isOn: false, lastFreq: null };
+
+  mix.connect(shaper).connect(lp1).connect(lp2).connect(amp).connect(trackChannels.lead);
+
+  oscMain.start();
+  oscSub.start();
+  noiseSrc.start();
+
+  liveLead = {
+    oscMain, oscSub, noiseSrc,
+    mainGain, subGain, noiseGain,
+    lp1, lp2, amp,
+    isOn: false, lastFreq: null,
+  };
+}
+
+function leadApplyPatch() {
+  const v = liveLead; if (!v) return;
+  v.oscMain.type = options.leadWave;
+  v.mainGain.gain.value = options.leadMainLevel;
+  v.oscSub.type = options.leadSubWave;
+  v.subGain.gain.value = (options.leadSub === 'off') ? 0 : options.leadSubLevel;
+  v.noiseGain.gain.value = options.leadNoiseLevel;
+  // Cutoff/Q updates take effect on the next trigger via the env schedule;
+  // for immediate audible feedback we also set them on the live nodes.
+  v.lp1.Q.value = options.leadResonance;
 }
 
 function leadEnvHold(g, t) {
@@ -2121,35 +2314,75 @@ function leadEnvHold(g, t) {
   else { g.cancelScheduledValues(t); g.setValueAtTime(g.value || 0, t); }
 }
 
-const LEAD_PORTA_SEC = 0.060;
+const clampHz = (hz) => Math.max(LEAD_HZ_MIN, Math.min(LEAD_HZ_MAX, hz));
+
+function leadFireFilterEnv(t) {
+  const v = liveLead; if (!v) return;
+  const base   = options.leadCutoff;
+  const amt    = options.leadEnvAmt;
+  const A      = options.leadAttack;
+  const D      = options.leadDecay;
+  const S      = options.leadSustain;
+  const peak   = clampHz(base * Math.pow(2, amt * LEAD_ENV_OCT_RANGE));
+  const susHz  = clampHz(base * Math.pow(2, amt * LEAD_ENV_OCT_RANGE * S));
+  for (const fp of [v.lp1.frequency, v.lp2.frequency]) {
+    leadEnvHold(fp, t);
+    fp.linearRampToValueAtTime(peak,  t + A);
+    fp.linearRampToValueAtTime(susHz, t + A + D);
+  }
+}
+
+function leadReleaseFilterEnv(t) {
+  const v = liveLead; if (!v) return;
+  const base = options.leadCutoff;
+  const R    = options.leadRelease;
+  for (const fp of [v.lp1.frequency, v.lp2.frequency]) {
+    leadEnvHold(fp, t);
+    fp.linearRampToValueAtTime(base, t + R);
+  }
+}
 
 function leadTrigger(t, freq) {
   ensureLeadVoice();
   const v = liveLead; if (!v) return;
-  const f = v.osc.frequency;
-  // Portamento: slide from the previous pitch to the new one over 60 ms.
-  // First trigger of the session has no previous pitch — jump.
+  const ratio = LEAD_SUB_RATIO[options.leadSub] || 1;
+  const fMain = v.oscMain.frequency;
+  const fSub  = v.oscSub.frequency;
+  // Portamento: glide from previous pitch to new pitch over 60 ms. First
+  // trigger of the session has no previous — jump.
   if (options.leadPorta === 'on' && v.lastFreq != null && v.lastFreq !== freq) {
-    f.cancelScheduledValues(t);
-    f.setValueAtTime(v.lastFreq, t);
-    f.exponentialRampToValueAtTime(freq, t + LEAD_PORTA_SEC);
+    fMain.cancelScheduledValues(t);
+    fMain.setValueAtTime(v.lastFreq, t);
+    fMain.exponentialRampToValueAtTime(freq, t + LEAD_PORTA_SEC);
+    fSub.cancelScheduledValues(t);
+    fSub.setValueAtTime(v.lastFreq * ratio, t);
+    fSub.exponentialRampToValueAtTime(freq * ratio, t + LEAD_PORTA_SEC);
   } else {
-    f.cancelScheduledValues(t);
-    f.setValueAtTime(freq, t);
+    fMain.cancelScheduledValues(t);
+    fMain.setValueAtTime(freq, t);
+    fSub.cancelScheduledValues(t);
+    fSub.setValueAtTime(freq * ratio, t);
   }
   v.lastFreq = freq;
+
+  const A = options.leadAttack;
+  const D = options.leadDecay;
+  const S = options.leadSustain;
   const g = v.amp.gain;
   leadEnvHold(g, t);
-  g.linearRampToValueAtTime(1.0,          t + LEAD_ATTACK);
-  g.linearRampToValueAtTime(LEAD_SUSTAIN, t + LEAD_ATTACK + LEAD_DECAY);
+  g.linearRampToValueAtTime(1.0, t + A);
+  g.linearRampToValueAtTime(S,   t + A + D);
+  leadFireFilterEnv(t);
   v.isOn = true;
 }
 
 function leadRelease(t) {
   const v = liveLead; if (!v || !v.isOn) return;
   const g = v.amp.gain;
+  const R = options.leadRelease;
   leadEnvHold(g, t);
-  g.linearRampToValueAtTime(0, t + LEAD_RELEASE);
+  g.linearRampToValueAtTime(0, t + R);
+  leadReleaseFilterEnv(t);
   v.isOn = false;
 }
 
@@ -2987,6 +3220,12 @@ function refreshFillRateUI() {
   });
 }
 function refreshLeadUI() {
+  document.querySelectorAll('[data-lead-wave]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.leadWave === options.leadWave);
+  });
+  document.querySelectorAll('#leadSubRow .btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.leadSub === options.leadSub);
+  });
   document.querySelectorAll('#leadLfoDenomRow .btn, #leadLfoDottedRow .btn').forEach(btn => {
     const d = parseInt(btn.dataset.denom, 10);
     const dot = btn.dataset.dotted === '1';
@@ -2996,6 +3235,21 @@ function refreshLeadUI() {
   document.querySelectorAll('[data-lead-porta]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.leadPorta === options.leadPorta);
   });
+  // Sliders: position + value labels
+  const set = (id, pos, label) => {
+    const el = document.getElementById(id); if (el) el.value = pos;
+    const lb = document.getElementById(id + 'Val'); if (lb) lb.textContent = label;
+  };
+  set('optLeadMain',    Math.round(options.leadMainLevel * 1000),  fmtPct(options.leadMainLevel));
+  set('optLeadSubLvl',  Math.round(options.leadSubLevel  * 1000),  fmtPct(options.leadSubLevel));
+  set('optLeadNoise',   Math.round(options.leadNoiseLevel * 1000), fmtPct(options.leadNoiseLevel));
+  set('optLeadCutoff',  cutoffHzToSlider(options.leadCutoff),      fmtHz(options.leadCutoff));
+  set('optLeadReso',    resoToSlider(options.leadResonance),       options.leadResonance.toFixed(1));
+  set('optLeadEnvAmt',  envAmtToSlider(options.leadEnvAmt),        fmtSignedPct(options.leadEnvAmt));
+  set('optLeadA',       attackToSlider(options.leadAttack),        fmtMs(options.leadAttack));
+  set('optLeadD',       decayToSlider(options.leadDecay),          fmtMs(options.leadDecay));
+  set('optLeadS',       sustainToSlider(options.leadSustain),      options.leadSustain.toFixed(2).slice(1));
+  set('optLeadR',       releaseToSlider(options.leadRelease),      fmtMs(options.leadRelease));
 }
 function refreshOptionsUI() {
   refreshDelayUI();
@@ -3073,8 +3327,54 @@ function initOptions() {
     });
   });
 
-  // Lead synth — LFO subdivision + Portamento. Key/Scale live in the global
-  // section above (shared with the 303).
+  // LEAD synth — all monosynth-specific controls live here. Key / Scale are
+  // pulled from the global section above (shared with the 303).
+  document.querySelectorAll('[data-lead-wave]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      options.leadWave = btn.dataset.leadWave;
+      leadApplyPatch();
+      refreshOptionsUI();
+    });
+  });
+
+  const subRow = document.getElementById('leadSubRow');
+  LEAD_SUB_ORDER.forEach(intv => {
+    const b = document.createElement('button');
+    b.className = 'btn ctrl';
+    b.dataset.leadSub = intv;
+    b.textContent = LEAD_SUB_LABEL[intv];
+    b.addEventListener('click', () => {
+      options.leadSub = intv;
+      leadApplyPatch();
+      refreshOptionsUI();
+    });
+    subRow.appendChild(b);
+  });
+
+  // Sliders — input handler updates options + live audio.
+  const bindLeadSlider = (id, get, set, fmt) => {
+    const el = document.getElementById(id);
+    const lb = document.getElementById(id + 'Val');
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const v = parseInt(el.value, 10);
+      const value = get(v);
+      set(value);
+      if (lb) lb.textContent = fmt(value);
+      leadApplyPatch();
+    });
+  };
+  bindLeadSlider('optLeadMain',   v => v / 1000,           x => options.leadMainLevel  = x, fmtPct);
+  bindLeadSlider('optLeadSubLvl', v => v / 1000,           x => options.leadSubLevel   = x, fmtPct);
+  bindLeadSlider('optLeadNoise',  v => v / 1000,           x => options.leadNoiseLevel = x, fmtPct);
+  bindLeadSlider('optLeadCutoff', sliderToCutoffHz,        x => options.leadCutoff     = x, fmtHz);
+  bindLeadSlider('optLeadReso',   sliderToReso,            x => options.leadResonance  = x, v => v.toFixed(1));
+  bindLeadSlider('optLeadEnvAmt', sliderToEnvAmt,          x => options.leadEnvAmt     = x, fmtSignedPct);
+  bindLeadSlider('optLeadA',      sliderToAttack,          x => options.leadAttack     = x, fmtMs);
+  bindLeadSlider('optLeadD',      sliderToDecay,           x => options.leadDecay      = x, fmtMs);
+  bindLeadSlider('optLeadS',      sliderToSustain,         x => options.leadSustain    = x, v => v.toFixed(2).slice(1));
+  bindLeadSlider('optLeadR',      sliderToRelease,         x => options.leadRelease    = x, fmtMs);
+
   const leadDenomRow  = document.getElementById('leadLfoDenomRow');
   const leadDottedRow = document.getElementById('leadLfoDottedRow');
   DELAY_SPEC.forEach(spec => {
@@ -3103,6 +3403,7 @@ function initOptions() {
     Object.assign(options, DEFAULTS);
     applyDelayFromOptions();
     if (master) master.setReso(options.resonance);
+    leadApplyPatch();
     relabelBassRows();
     relabelLeadRows();
     refreshOptionsUI();
