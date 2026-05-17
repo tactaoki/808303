@@ -1107,9 +1107,29 @@ input.display:focus {
         <div class="lbl rt" id="optLeadRVal">250ms</div>
       </div>
 
+      <div class="opt-label" style="margin-top:8px">LEAD · LFO WAVE</div>
+      <div class="opt-row">
+        <button class="btn ctrl" data-lead-lfo-wave="sine">Sine</button>
+        <button class="btn ctrl" data-lead-lfo-wave="square">Square</button>
+      </div>
+
       <div class="opt-label" style="margin-top:8px">LEAD · LFO RATE</div>
       <div class="opt-row" id="leadLfoDenomRow"></div>
       <div class="opt-row" id="leadLfoDottedRow"></div>
+
+      <div class="opt-label" style="margin-top:8px">LEAD · LFO DEPTH</div>
+      <div class="slider opt-slider">
+        <div class="lbl">Depth</div>
+        <input type="range" min="0" max="1000" value="0" id="optLeadLfoDepth">
+        <div class="lbl rt" id="optLeadLfoDepthVal">0</div>
+      </div>
+
+      <div class="opt-label" style="margin-top:8px">LEAD · LFO TARGETS</div>
+      <div class="opt-row">
+        <button class="btn ctrl" data-lead-lfo-target="pitch">Pitch</button>
+        <button class="btn ctrl" data-lead-lfo-target="vol">Volume</button>
+        <button class="btn ctrl" data-lead-lfo-target="filter">Filter</button>
+      </div>
 
       <div class="opt-label" style="margin-top:8px">LEAD · PORTAMENTO</div>
       <div class="opt-row">
@@ -1818,9 +1838,14 @@ const DEFAULTS = {
   leadDecay:      0.150,                  // sec
   leadSustain:    0.5,                    // 0..1
   leadRelease:    0.250,                  // sec
-  leadLfoDenom:   8,
-  leadLfoDotted:  false,
-  leadPorta:      'off',
+  leadLfoWave:     'sine',          // sine | square
+  leadLfoDenom:    8,
+  leadLfoDotted:   false,
+  leadLfoDepth:    0,               // 0..1
+  leadLfoToPitch:  false,
+  leadLfoToVol:    false,
+  leadLfoToFilter: false,
+  leadPorta:       'off',
   // FILL IN repeat rate: 4 = quarter, 8 = 8th, 16 = 16th notes
   fillRate: 16,
 };
@@ -2184,6 +2209,16 @@ const LEAD_HZ_MIN = 20;
 const LEAD_HZ_MAX = 18000;
 const LEAD_ENV_OCT_RANGE = 4;  // env amt ±1.0 sweeps ±4 octaves of cutoff
 
+// LFO modulation scales (max amount when depth = 1).
+const LEAD_LFO_PITCH_CENTS = 100;   // ±1 semitone vibrato
+const LEAD_LFO_VOL_RANGE   = 0.5;   // ±0.5 gain (full tremolo at depth=1)
+const LEAD_LFO_FILT_HZ     = 1500;  // ±1500 Hz around env-driven cutoff
+
+function leadLfoFreq() {
+  const noteSec = (60 / bpm) * 4 / options.leadLfoDenom * (options.leadLfoDotted ? 1.5 : 1);
+  return 1 / noteSec;
+}
+
 const LEAD_SUB_RATIO = {
   'off':     1,
   '-1oct':   0.5,
@@ -2282,17 +2317,44 @@ function ensureLeadVoice() {
 
   const amp = ctx.createGain();
   amp.gain.value = 0;
+  // tremGain rides AFTER amp so the ADSR fully gates the voice; the volume
+  // LFO modulates tremGain instead of amp, which would still bleed signal
+  // through after the envelope closes.
+  const tremGain = ctx.createGain();
+  tremGain.gain.value = 1;
 
-  mix.connect(shaper).connect(lp1).connect(lp2).connect(amp).connect(trackChannels.lead);
+  mix.connect(shaper).connect(lp1).connect(lp2).connect(amp).connect(tremGain).connect(trackChannels.lead);
+
+  // --- LFO (always running, depth gains decide which targets receive it) ---
+  const lfo = ctx.createOscillator();
+  lfo.type = options.leadLfoWave;
+  lfo.frequency.value = leadLfoFreq();
+
+  const pitchDepth = ctx.createGain();  // cents
+  const volDepth   = ctx.createGain();  // gain ± (drives tremGain)
+  const filtDepth  = ctx.createGain();  // Hz  ±
+  pitchDepth.gain.value = 0;
+  volDepth.gain.value   = 0;
+  filtDepth.gain.value  = 0;
+
+  lfo.connect(pitchDepth);
+  lfo.connect(volDepth);
+  lfo.connect(filtDepth);
+  pitchDepth.connect(oscMain.detune);
+  pitchDepth.connect(oscSub.detune);
+  volDepth.connect(tremGain.gain);
+  filtDepth.connect(lp1.frequency);
 
   oscMain.start();
   oscSub.start();
   noiseSrc.start();
+  lfo.start();
 
   liveLead = {
     oscMain, oscSub, noiseSrc,
     mainGain, subGain, noiseGain,
-    lp1, lp2, amp,
+    lp1, lp2, amp, tremGain,
+    lfo, pitchDepth, volDepth, filtDepth,
     isOn: false, lastFreq: null,
   };
 }
@@ -2307,6 +2369,27 @@ function leadApplyPatch() {
   // Cutoff/Q updates take effect on the next trigger via the env schedule;
   // for immediate audible feedback we also set them on the live nodes.
   v.lp1.Q.value = options.leadResonance;
+  // LFO: wave, rate, and per-target depths.
+  v.lfo.type = options.leadLfoWave;
+  v.lfo.frequency.setValueAtTime(leadLfoFreq(), ctx.currentTime);
+  const d = options.leadLfoDepth;
+  v.pitchDepth.gain.value = options.leadLfoToPitch  ? d * LEAD_LFO_PITCH_CENTS : 0;
+  v.filtDepth.gain.value  = options.leadLfoToFilter ? d * LEAD_LFO_FILT_HZ     : 0;
+  // One-sided tremolo: tremGain swings (1 - depth) .. 1.0 so depth=1 reaches
+  // silence at the LFO trough rather than swinging above unity (which would
+  // need master headroom and could clip).
+  if (options.leadLfoToVol) {
+    v.tremGain.gain.value = 1 - d * LEAD_LFO_VOL_RANGE;
+    v.volDepth.gain.value =     d * LEAD_LFO_VOL_RANGE;
+  } else {
+    v.tremGain.gain.value = 1;
+    v.volDepth.gain.value = 0;
+  }
+}
+
+function applyLeadLfoRate() {
+  const v = liveLead; if (!v) return;
+  v.lfo.frequency.setValueAtTime(leadLfoFreq(), ctx.currentTime);
 }
 
 function leadEnvHold(g, t) {
@@ -2898,6 +2981,7 @@ function setBPM(v) {
   const el = document.getElementById('bpmDisplay');
   if (el && document.activeElement !== el) el.value = String(bpm);
   applyDelayFromOptions();
+  applyLeadLfoRate();
 }
 
 function applyDelayFromOptions() {
@@ -3226,11 +3310,21 @@ function refreshLeadUI() {
   document.querySelectorAll('#leadSubRow .btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.leadSub === options.leadSub);
   });
+  document.querySelectorAll('[data-lead-lfo-wave]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.leadLfoWave === options.leadLfoWave);
+  });
   document.querySelectorAll('#leadLfoDenomRow .btn, #leadLfoDottedRow .btn').forEach(btn => {
     const d = parseInt(btn.dataset.denom, 10);
     const dot = btn.dataset.dotted === '1';
     btn.classList.toggle('active',
       d === options.leadLfoDenom && dot === options.leadLfoDotted);
+  });
+  document.querySelectorAll('[data-lead-lfo-target]').forEach(btn => {
+    const tgt = btn.dataset.leadLfoTarget;
+    const on = (tgt === 'pitch')  ? options.leadLfoToPitch
+             : (tgt === 'vol')    ? options.leadLfoToVol
+             : (tgt === 'filter') ? options.leadLfoToFilter : false;
+    btn.classList.toggle('active', on);
   });
   document.querySelectorAll('[data-lead-porta]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.leadPorta === options.leadPorta);
@@ -3250,6 +3344,7 @@ function refreshLeadUI() {
   set('optLeadD',       decayToSlider(options.leadDecay),          fmtMs(options.leadDecay));
   set('optLeadS',       sustainToSlider(options.leadSustain),      options.leadSustain.toFixed(2).slice(1));
   set('optLeadR',       releaseToSlider(options.leadRelease),      fmtMs(options.leadRelease));
+  set('optLeadLfoDepth', Math.round(options.leadLfoDepth * 1000),  fmtPct(options.leadLfoDepth));
 }
 function refreshOptionsUI() {
   refreshDelayUI();
@@ -3375,6 +3470,14 @@ function initOptions() {
   bindLeadSlider('optLeadS',      sliderToSustain,         x => options.leadSustain    = x, v => v.toFixed(2).slice(1));
   bindLeadSlider('optLeadR',      sliderToRelease,         x => options.leadRelease    = x, fmtMs);
 
+  document.querySelectorAll('[data-lead-lfo-wave]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      options.leadLfoWave = btn.dataset.leadLfoWave;
+      leadApplyPatch();
+      refreshOptionsUI();
+    });
+  });
+
   const leadDenomRow  = document.getElementById('leadLfoDenomRow');
   const leadDottedRow = document.getElementById('leadLfoDottedRow');
   DELAY_SPEC.forEach(spec => {
@@ -3386,10 +3489,25 @@ function initOptions() {
     b.addEventListener('click', () => {
       options.leadLfoDenom  = spec.denom;
       options.leadLfoDotted = spec.dotted;
+      applyLeadLfoRate();
       refreshOptionsUI();
     });
     (spec.dotted ? leadDottedRow : leadDenomRow).appendChild(b);
   });
+
+  bindLeadSlider('optLeadLfoDepth', v => v / 1000, x => options.leadLfoDepth = x, fmtPct);
+
+  document.querySelectorAll('[data-lead-lfo-target]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tgt = btn.dataset.leadLfoTarget;
+      if      (tgt === 'pitch')  options.leadLfoToPitch  = !options.leadLfoToPitch;
+      else if (tgt === 'vol')    options.leadLfoToVol    = !options.leadLfoToVol;
+      else if (tgt === 'filter') options.leadLfoToFilter = !options.leadLfoToFilter;
+      leadApplyPatch();
+      refreshOptionsUI();
+    });
+  });
+
   document.querySelectorAll('[data-lead-porta]').forEach(btn => {
     btn.addEventListener('click', () => {
       options.leadPorta = btn.dataset.leadPorta;
