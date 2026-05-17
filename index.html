@@ -1815,16 +1815,22 @@ function build303Filter(ctx, isAccent) {
 }
 
 /* Fixed-time, tempo-independent VCF envelope. Accent gets a brighter peak
-   AND a faster decay (matches the real 303's fixed 200ms accent decay). */
+   AND a faster decay (matches the real 303's fixed 200ms accent decay).
+   Floor sits ABOVE the bass register (≈350 Hz, the upper third of the
+   playable range is ~220 Hz max) — if we decayed back to 80 Hz the LP
+   would silence the oscillator's fundamental before any pitch slide
+   could be heard. With a higher floor the sustained portion of a tied
+   phrase stays audible and pitch movement reads clearly. */
 function fireFilterEnv(cutoffParam, time, isAccent) {
   const peak  = isAccent ? 6500 : 3000;
+  const floor = 350;
   const atk   = isAccent ? 0.006 : 0.008;
-  const decay = isAccent ? 0.180 : 0.280;
+  const decay = isAccent ? 0.300 : 0.500;
   try {
     cutoffParam.cancelScheduledValues(time);
-    cutoffParam.setValueAtTime(80, time);
+    cutoffParam.setValueAtTime(floor, time);
     cutoffParam.linearRampToValueAtTime(peak, time + atk);
-    cutoffParam.exponentialRampToValueAtTime(80, time + atk + decay);
+    cutoffParam.exponentialRampToValueAtTime(floor, time + atk + decay);
   } catch (_) {}
 }
 
