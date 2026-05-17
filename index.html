@@ -755,6 +755,100 @@ input.display:focus {
 }
 .ack-flash { animation: ackTap 180ms ease-out; }
 
+/* ===== 303 grid (bass synth, monosynth, column-exclusive) ===== */
+.grid-303 {
+  display: grid;
+  grid-template-columns: clamp(46px, 7vw, 60px) repeat(16, minmax(0, 1fr));
+  gap: 3px;
+  height: 100%;
+  min-width: 0;
+}
+.grid.hidden, .grid-303.hidden { display: none; }
+.bass-label {
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(180deg, #efe2c2 0%, #c9b88f 100%);
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  min-width: 0;
+  overflow: hidden;
+}
+.pitch-tag {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-weight: 800;
+  font-size: clamp(10px, 1.4vw, 13px);
+  letter-spacing: .06em;
+  background: var(--ink);
+  color: var(--accent-white);
+  padding: 1px 6px;
+  border-radius: 2px;
+}
+
+/* ===== 303 (silver/black) theme — applies only when on bass view ===== */
+.panel[data-machine="303"] {
+  --bg-panel:       #b4b8bc;
+  --bg-panel-dark:  #898d92;
+  --bg-panel-deep:  #5e6268;
+  --bg-wood:        #1a1a1c;
+  --bg-wood-light:  #2a2a2e;
+  --ink:            #121214;
+  --ink-soft:       #2a2a2e;
+}
+.panel[data-machine="303"] .brand {
+  background: linear-gradient(180deg, #2a2a2e 0%, #15151a 100%);
+  color: #f0f0f2;
+  box-shadow: inset 0 -2px 0 #000;
+}
+.panel[data-machine="303"] .brand .model {
+  font-style: normal;
+  letter-spacing: .08em;
+}
+.panel[data-machine="303"] .header {
+  background: linear-gradient(180deg, rgba(0,0,0,.10), rgba(0,0,0,0));
+}
+.panel[data-machine="303"] .step-leds {
+  background: linear-gradient(180deg, rgba(0,0,0,.18), rgba(0,0,0,0));
+}
+.panel[data-machine="303"] .bass-label {
+  background: linear-gradient(180deg, #d0d4d8 0%, #909498 100%);
+}
+.panel[data-machine="303"] .pitch-tag {
+  background: #15151a;
+  color: #e8e8ea;
+}
+/* Silver-themed cell defaults; on/accent override per group keeps the LED feel. */
+.panel[data-machine="303"] .cell {
+  background: #888c92;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.3),
+    inset 0 -2px 0 rgba(0,0,0,.30);
+}
+.panel[data-machine="303"] .cell.grp-a { background: #9aa0a6; }
+.panel[data-machine="303"] .cell.grp-b { background: #969aa0; }
+.panel[data-machine="303"] .cell.grp-c { background: #a4aab0; }
+.panel[data-machine="303"] .cell.grp-d { background: #8c9298; }
+.panel[data-machine="303"] .cell.on,
+.panel[data-machine="303"] .cell.grp-a.on,
+.panel[data-machine="303"] .cell.grp-b.on,
+.panel[data-machine="303"] .cell.grp-c.on,
+.panel[data-machine="303"] .cell.grp-d.on {
+  background: linear-gradient(180deg, #ffae5a 0%, #d8761c 70%, #6e3a08 100%);
+}
+.panel[data-machine="303"] .cell.accent,
+.panel[data-machine="303"] .cell.grp-a.accent,
+.panel[data-machine="303"] .cell.grp-b.accent,
+.panel[data-machine="303"] .cell.grp-c.accent,
+.panel[data-machine="303"] .cell.grp-d.accent {
+  background: linear-gradient(180deg, #ff6048 0%, #d12810 70%, #6e1408 100%);
+}
+.panel[data-machine="303"] .fx {
+  background:
+    linear-gradient(180deg, rgba(0,0,0,.08), rgba(0,0,0,0)),
+    var(--bg-panel-dark);
+}
+.panel[data-machine="303"] .display {
+  background: #0a0a0c;
+}
+
 /* Tighter layout for short screens */
 @media (max-height: 380px) {
   .panel { margin: 4px 22px; }
@@ -789,7 +883,8 @@ input.display:focus {
 
     <!-- Step grid -->
     <section class="grid-wrap">
-      <div class="grid" id="grid"></div>
+      <div class="grid"     id="grid"></div>
+      <div class="grid-303 hidden" id="grid303"></div>
     </section>
 
     <!-- Master FX -->
@@ -840,6 +935,21 @@ input.display:focus {
         <div class="lbl">Mild</div>
         <input type="range" min="0" max="1000" value="500" id="optReso">
         <div class="lbl rt">Wild</div>
+      </div>
+    </section>
+
+    <section class="opt-section">
+      <div class="opt-label">BASS · KEY</div>
+      <div class="opt-row" id="bassKeyRow"></div>
+      <div class="opt-label" style="margin-top:8px">BASS · SCALE</div>
+      <div class="opt-row">
+        <button class="btn ctrl" data-bass-mode="minor">Minor</button>
+        <button class="btn ctrl" data-bass-mode="major">Major</button>
+      </div>
+      <div class="opt-label" style="margin-top:8px">BASS · WAVE</div>
+      <div class="opt-row">
+        <button class="btn ctrl" data-bass-wave="square">Square</button>
+        <button class="btn ctrl" data-bass-wave="triangle">Triangle</button>
       </div>
     </section>
 
@@ -1380,6 +1490,31 @@ const pendingMuted   = new Array(N_VOICES).fill(false);
 const pendingSoloed  = new Array(N_VOICES).fill(false);
 let hasPending = false;
 
+/* ----- 303 (bass) pattern data ----- */
+const N_ROWS_303 = 7;
+const pIdx303 = (row, s) => row * N_STEPS + s;
+const pattern303        = new Uint8Array(N_ROWS_303 * N_STEPS);
+const pendingPattern303 = new Uint8Array(N_ROWS_303 * N_STEPS);
+
+const PENTA_MINOR = [0, 3, 5, 7, 10];   // 1, b3, 4, 5, b7
+const PENTA_MAJOR = [0, 2, 4, 7, 9];    // 1, 2, 3, 5, 6
+const KEYS = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const KEY_SEMI = Object.fromEntries(KEYS.map((k, i) => [k, i]));
+
+function row303Midi(row) {
+  const scale = options.bassMode === 'minor' ? PENTA_MINOR : PENTA_MAJOR;
+  const rootMidi = KEY_SEMI[options.bassKey] + 12 * 3;  // A → MIDI 45 ≈ 110Hz
+  const offsets = [scale[4] - 12, scale[0], scale[1], scale[2], scale[3], scale[4], scale[0] + 12];
+  return rootMidi + offsets[row];
+}
+function row303Pitch(row) {
+  const midi = row303Midi(row);
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+function row303Label(row) {
+  return KEYS[((row303Midi(row) % 12) + 12) % 12];
+}
+
 /* ----- Options (driven by the Options overlay) ----- */
 const DEFAULTS = {
   delayDenom: 8, delayDotted: true,
@@ -1390,6 +1525,10 @@ const DEFAULTS = {
   snapNotes: true,
   snapTracks: true,
   snapEffects: false,
+  // Bass synth (303 view)
+  bassKey: 'A',
+  bassMode: 'minor',
+  bassWave: 'square',
 };
 const options = { ...DEFAULTS };
 
@@ -1427,12 +1566,32 @@ function cycleCellOn(arr, v, s) {
   return { state: arr[i], partnerCleared };
 }
 
+// 303 grid: same on/accent/off cycle but with COLUMN exclusivity (monosynth).
+// Turning a cell on clears every OTHER row at the same step.
+function cycleCellOn303(arr, row, s) {
+  const i = pIdx303(row, s);
+  arr[i] = (arr[i] + 1) % 3;
+  const cleared = [];
+  if (arr[i] !== 0) {
+    for (let r = 0; r < N_ROWS_303; r++) {
+      if (r === row) continue;
+      const pi = pIdx303(r, s);
+      if (arr[pi] !== 0) { arr[pi] = 0; cleared.push(r); }
+    }
+  }
+  return { state: arr[i], cleared };
+}
+
 const cellPending = (v, s) => pendingPattern[pIdx(v, s)] !== pattern[pIdx(v, s)];
+const cellPending303 = (row, s) => pendingPattern303[pIdx303(row, s)] !== pattern303[pIdx303(row, s)];
 const msPending   = (v) => pendingMuted[v] !== muted[v] || pendingSoloed[v] !== soloed[v];
 
 function recomputeHasPending() {
   for (let i = 0; i < pattern.length; i++) {
     if (pendingPattern[i] !== pattern[i]) { hasPending = true; return; }
+  }
+  for (let i = 0; i < pattern303.length; i++) {
+    if (pendingPattern303[i] !== pattern303[i]) { hasPending = true; return; }
   }
   for (let v = 0; v < N_VOICES; v++) {
     if (pendingMuted[v] !== muted[v] || pendingSoloed[v] !== soloed[v]) {
@@ -1472,6 +1631,67 @@ let currentAudibleStep = 0;
 
 function step16Duration() { return (60 / bpm) / 4; }
 
+/* ---------- 303 (bass) voice ---------- */
+
+function voice303(time, pitchHz, accent, gateLength, slideTargetHz) {
+  if (!master) return;
+  const osc = ctx.createOscillator();
+  osc.type = options.bassWave === 'triangle' ? 'triangle' : 'square';
+  osc.frequency.setValueAtTime(pitchHz, time);
+  if (slideTargetHz) {
+    // Land the slide just before the next note's attack so they meet at pitch.
+    osc.frequency.exponentialRampToValueAtTime(
+      slideTargetHz, time + gateLength - 0.005);
+  }
+
+  const filt = ctx.createBiquadFilter();
+  filt.type = 'lowpass';
+  filt.Q.value = accent ? 14 : 9;
+  // 303 squelch: low at start → snap up high in 5ms → exp decay back to low.
+  filt.frequency.setValueAtTime(150, time);
+  filt.frequency.linearRampToValueAtTime(accent ? 8500 : 4500, time + 0.005);
+  filt.frequency.exponentialRampToValueAtTime(150, time + Math.max(gateLength, 0.04));
+
+  const amp = ctx.createGain();
+  const peak = accent ? 0.85 : 0.55;
+  amp.gain.setValueAtTime(0, time);
+  amp.gain.linearRampToValueAtTime(peak, time + 0.002);
+  amp.gain.setValueAtTime(peak, Math.max(time + 0.003, time + gateLength - 0.005));
+  amp.gain.linearRampToValueAtTime(0, time + gateLength);
+
+  osc.connect(filt).connect(amp).connect(master.input);
+  osc.start(time);
+  osc.stop(time + gateLength + 0.05);
+}
+
+function schedule303(sourceStep, realStep, time) {
+  // Find the single active row at sourceStep (column exclusivity guarantees
+  // there's at most one).
+  let thisRow = -1;
+  for (let r = 0; r < N_ROWS_303; r++) {
+    if (pattern303[pIdx303(r, sourceStep)] !== 0) { thisRow = r; break; }
+  }
+  if (thisRow < 0) return;
+  const state = pattern303[pIdx303(thisRow, sourceStep)];
+
+  // While fill is active we treat every repeat as discrete (no slide).
+  let nextRow = -1;
+  if (!fillActive) {
+    const ns = (realStep + 1) % N_STEPS;
+    for (let r = 0; r < N_ROWS_303; r++) {
+      if (pattern303[pIdx303(r, ns)] !== 0) { nextRow = r; break; }
+    }
+  }
+
+  const stepDur = step16Duration();
+  const isLegato = nextRow >= 0;
+  const gateLength = isLegato ? stepDur + 0.002 : stepDur * 0.6;
+  const slideTargetHz = (isLegato && nextRow !== thisRow)
+    ? row303Pitch(nextRow)
+    : null;
+  voice303(time, row303Pitch(thisRow), state === 2, gateLength, slideTargetHz);
+}
+
 function scheduleStep(step, time) {
   // While fill is held, sound comes from the frozen step; the LED still
   // tracks the real step so the user sees where playback will resume.
@@ -1482,6 +1702,7 @@ function scheduleStep(step, time) {
     if (!isAudible(v)) continue;
     voices[v](time, state === 2);
   }
+  schedule303(sourceStep, step, time);
   visualQueue.push({ step, time });
 }
 
@@ -1577,6 +1798,9 @@ function stop() {
   for (let i = 0; i < N_STEPS; i++) {
     leds[i].classList.remove('on');
     for (let v = 0; v < N_VOICES; v++) cells[v][i].classList.remove('cur');
+    for (let r = 0; r < N_ROWS_303; r++) {
+      if (cells303[r][i]) cells303[r][i].classList.remove('cur');
+    }
   }
   lastColStep = -1;
 }
@@ -1668,6 +1892,72 @@ function buildUI() {
   });
 }
 
+/* ---------- 303 grid build + tap handler ---------- */
+
+const cells303 = Array.from({length: N_ROWS_303}, () => new Array(N_STEPS));
+
+function buildGrid303() {
+  const g303 = document.getElementById('grid303');
+  // Build top-down so the highest pitch (row 6) sits at the top of the grid.
+  for (let r = N_ROWS_303 - 1; r >= 0; r--) {
+    const lab = document.createElement('div');
+    lab.className = 'row-label bass-label';
+    const tag = document.createElement('span');
+    tag.className = 'pitch-tag';
+    tag.dataset.row = String(r);
+    tag.textContent = row303Label(r);
+    lab.appendChild(tag);
+    g303.appendChild(lab);
+
+    for (let s = 0; s < N_STEPS; s++) {
+      const c = document.createElement('div');
+      c.className = 'cell ' + groupClass(s);
+      c.dataset.row = String(r);
+      c.dataset.s = String(s);
+      g303.appendChild(c);
+      cells303[r][s] = c;
+    }
+  }
+
+  const onTap = (ev) => {
+    const t = ev.target;
+    if (!t.classList.contains('cell')) return;
+    ev.preventDefault();
+    const r = parseInt(t.dataset.row, 10);
+    const s = parseInt(t.dataset.s, 10);
+    let res;
+    if (options.snapNotes) {
+      res = cycleCellOn303(pendingPattern303, r, s);
+    } else {
+      res = cycleCellOn303(pattern303, r, s);
+      pendingPattern303[pIdx303(r, s)] = pattern303[pIdx303(r, s)];
+      for (const cr of res.cleared) pendingPattern303[pIdx303(cr, s)] = 0;
+    }
+    renderCell303(r, s);
+    for (const cr of res.cleared) renderCell303(cr, s);
+    recomputeHasPending();
+  };
+  g303.addEventListener('touchstart', onTap, { passive: false });
+  g303.addEventListener('mousedown', onTap);
+}
+
+function renderCell303(row, s) {
+  const el = cells303[row][s];
+  if (!el) return;
+  const state = pendingPattern303[pIdx303(row, s)];
+  el.classList.remove('on', 'accent');
+  if (state === 1) el.classList.add('on');
+  if (state === 2) el.classList.add('accent');
+  el.classList.toggle('pending', cellPending303(row, s));
+}
+
+function relabelBassRows() {
+  document.querySelectorAll('.pitch-tag[data-row]').forEach(tag => {
+    const r = parseInt(tag.dataset.row, 10);
+    tag.textContent = row303Label(r);
+  });
+}
+
 function groupClass(s) {
   const g = Math.floor(s / 4);
   return ['grp-a','grp-b','grp-c','grp-d'][g];
@@ -1693,14 +1983,23 @@ function refreshMSButtons(v) {
 }
 
 function commitNotesOnly() {
-  let changed = false;
+  let changed808 = false, changed303 = false;
   for (let i = 0; i < pattern.length; i++) {
-    if (pendingPattern[i] !== pattern[i]) { changed = true; break; }
+    if (pendingPattern[i] !== pattern[i]) { changed808 = true; break; }
   }
-  if (!changed) return;
-  pattern.set(pendingPattern);
-  for (let v = 0; v < N_VOICES; v++) {
-    for (let s = 0; s < N_STEPS; s++) renderCell(v, s);
+  for (let i = 0; i < pattern303.length; i++) {
+    if (pendingPattern303[i] !== pattern303[i]) { changed303 = true; break; }
+  }
+  if (!changed808 && !changed303) return;
+  if (changed808) {
+    pattern.set(pendingPattern);
+    for (let v = 0; v < N_VOICES; v++)
+      for (let s = 0; s < N_STEPS; s++) renderCell(v, s);
+  }
+  if (changed303) {
+    pattern303.set(pendingPattern303);
+    for (let r = 0; r < N_ROWS_303; r++)
+      for (let s = 0; s < N_STEPS; s++) renderCell303(r, s);
   }
   recomputeHasPending();
 }
@@ -1739,12 +2038,18 @@ function commitPending() {
 function clearAllNotes() {
   if (options.snapNotes) {
     pendingPattern.fill(0);
+    pendingPattern303.fill(0);
   } else {
     pattern.fill(0);
     pendingPattern.fill(0);
+    pattern303.fill(0);
+    pendingPattern303.fill(0);
   }
   for (let v = 0; v < N_VOICES; v++) {
     for (let s = 0; s < N_STEPS; s++) renderCell(v, s);
+  }
+  for (let r = 0; r < N_ROWS_303; r++) {
+    for (let s = 0; s < N_STEPS; s++) renderCell303(r, s);
   }
   recomputeHasPending();
 }
@@ -1810,6 +2115,12 @@ function bindTransport() {
 let currentMachine = '808';
 function switchMachine() {
   currentMachine = currentMachine === '808' ? '303' : '808';
+  document.querySelector('.panel').dataset.machine = currentMachine;
+  const brand = document.querySelector('.brand .model');
+  if (brand) brand.textContent = currentMachine === '808' ? 'Rhythm' : 'Bass';
+  document.getElementById('grid').classList.toggle('hidden', currentMachine !== '808');
+  document.getElementById('grid303').classList.toggle('hidden', currentMachine !== '303');
+  // Button label always shows the *destination* machine.
   document.getElementById('pageToggle').textContent =
     currentMachine === '808' ? '303' : '808';
 }
@@ -1911,6 +2222,11 @@ function renderLoop() {
       for (let v = 0; v < N_VOICES; v++) {
         for (let i = 0; i < N_STEPS; i++) {
           cells[v][i].classList.toggle('cur', i === colStep);
+        }
+      }
+      for (let r = 0; r < N_ROWS_303; r++) {
+        for (let i = 0; i < N_STEPS; i++) {
+          if (cells303[r][i]) cells303[r][i].classList.toggle('cur', i === colStep);
         }
       }
       lastColStep = colStep;
@@ -2021,9 +2337,21 @@ function refreshSnapUI() {
     if (btn) btn.classList.toggle('active', !!options['snap' + cat]);
   }
 }
+function refreshBassUI() {
+  document.querySelectorAll('#bassKeyRow .btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.key === options.bassKey);
+  });
+  document.querySelectorAll('[data-bass-mode]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.bassMode === options.bassMode);
+  });
+  document.querySelectorAll('[data-bass-wave]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.bassWave === options.bassWave);
+  });
+}
 function refreshOptionsUI() {
   refreshDelayUI();
   refreshSnapUI();
+  refreshBassUI();
   document.getElementById('optReso').value = Math.round(options.resonance * 1000);
 }
 
@@ -2058,12 +2386,41 @@ function initOptions() {
     btn.addEventListener('click', () => toggleSnap(btn.dataset.snap));
   });
 
+  // Bass synth — Key buttons
+  const keyRow = document.getElementById('bassKeyRow');
+  KEYS.forEach(k => {
+    const b = document.createElement('button');
+    b.className = 'btn ctrl';
+    b.dataset.key = k;
+    b.textContent = k;
+    b.addEventListener('click', () => {
+      options.bassKey = k;
+      relabelBassRows();
+      refreshOptionsUI();
+    });
+    keyRow.appendChild(b);
+  });
+  document.querySelectorAll('[data-bass-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      options.bassMode = btn.dataset.bassMode;
+      relabelBassRows();
+      refreshOptionsUI();
+    });
+  });
+  document.querySelectorAll('[data-bass-wave]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      options.bassWave = btn.dataset.bassWave;
+      refreshOptionsUI();
+    });
+  });
+
   document.getElementById('optReset').addEventListener('click', () => {
     // Don't strand the user's in-progress edits.
     if (hasPending) commitPending();
     Object.assign(options, DEFAULTS);
     applyDelayFromOptions();
     if (master) master.setReso(options.resonance);
+    relabelBassRows();
     refreshOptionsUI();
   });
 
@@ -2100,6 +2457,7 @@ function bindAckFeedback() {
 /* ---------- bootstrap ---------- */
 
 buildUI();
+buildGrid303();
 bindTransport();
 const applyFX = bindFX();
 bindBoot(applyFX);
