@@ -197,6 +197,7 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
   border-radius: 3px;
   padding: 3px 7px;
   min-width: 46px;
+  width: 56px;
   text-align: center;
   font-size: clamp(12px, 1.8vw, 18px);
   letter-spacing: .06em;
@@ -205,6 +206,22 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
     inset 0 1px 0 rgba(0,0,0,.6),
     0 0 6px rgba(255,138,31,.15);
   text-shadow: 0 0 6px rgba(255,138,31,.7);
+  -webkit-appearance: none;
+  appearance: none;
+  -moz-appearance: textfield;
+  outline: none;
+  caret-color: var(--display-on);
+}
+input.display::-webkit-outer-spin-button,
+input.display::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input.display:focus {
+  box-shadow:
+    inset 0 0 12px rgba(255,138,31,.45),
+    inset 0 1px 0 rgba(0,0,0,.6),
+    0 0 10px rgba(255,138,31,.4);
 }
 .bpm .step-btn {
   width: 24px; height: 24px; border-radius: 50%;
@@ -526,7 +543,7 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
         <div class="bpm">
           <span class="label">TEMPO</span>
           <button class="btn step-btn" id="bpmDown">−</button>
-          <div class="display" id="bpmDisplay">120</div>
+          <input type="number" class="display" id="bpmDisplay" value="120" min="40" max="240" step="1" inputmode="numeric" pattern="[0-9]*">
           <button class="btn step-btn" id="bpmUp">+</button>
         </div>
       </div>
@@ -645,21 +662,20 @@ class SatProcessor extends AudioWorkletProcessor {
   constructor(){ super(); this._zL = 0; this._zR = 0; this._yL = 0; this._yR = 0; }
   _tanh(x){ const a = Math.abs(x); if (a < 3) { const x2 = x*x; return x*(27+x2)/(27+9*x2); } return x>0?1:-1; }
   _stage(x, prev, drive){
-    // 2x upsample: linear interpolate one sample between prev & x, process both, take last,
-    // then one-pole LP at fs (the host rate) to suppress images.
+    // 2x upsample + tanh + downsample. Drive curve is gentle: at drive=1
+    // peak gain is ~5x (≈14dB), at drive=0 it's unity.
     const up0 = (prev + x) * 0.5;
     const up1 = x;
-    const g = 1 + drive * 9;
+    const g = 1 + drive * 4;
     const s0 = this._tanh(up0 * g);
     const s1 = this._tanh(up1 * g);
-    // downsample with simple 2-tap average (acts as LP)
     return (s0 + s1) * 0.5;
   }
   process(inputs, outputs, params) {
     const inp = inputs[0]; const out = outputs[0];
     if (!inp || inp.length === 0) return true;
     const drive = params.drive[0];
-    const makeup = 1 / (1 + drive * 2.5);
+    const makeup = 1 / (1 + drive * 1.3);
     const n = out[0].length;
     const ch = Math.min(inp.length, out.length);
     for (let c = 0; c < ch; c++) {
@@ -790,10 +806,10 @@ function buildMasterBus(ctx) {
   dlyRet.connect(out);
   revRet.connect(out);
 
-  // Fixed resonance: gentle pre-oscillation peak. Worklet's k = reso*4;
-  // self-oscillates around k≈4.0, so 0.55 (k=2.2) gives a tasteful resonant
-  // bump without the screaming character. Modest internal drive only.
-  const FIXED_RESO = 0.55;
+  // Fixed resonance: pronounced but controlled. Worklet's k = reso*4;
+  // self-oscillates around k≈4.0, so 0.7 (k=2.8) gives a clearly audible
+  // resonant peak with character but no screaming.
+  const FIXED_RESO = 0.70;
   const FIXED_FILTER_DRIVE = 0.18;
   if (workletReady) {
     filter.parameters.get('resonance').setValueAtTime(FIXED_RESO, ctx.currentTime);
@@ -1003,7 +1019,7 @@ function createVoices(ctx, dest) {
   }
   function oh(time, accent) {
     const peak = accent ? 0.95 : 0.65;
-    const env = metalCluster(time, 1.4, peak, 7000, 8000, 1.0);
+    const env = metalCluster(time, 2.2, peak, 7000, 8000, 1.0);
     env.connect(dest);
     pendingOH = { env, time };
   }
@@ -1254,9 +1270,10 @@ document.head.appendChild(dimStyle);
 
 function setBPM(v) {
   bpm = Math.max(40, Math.min(240, v|0));
-  document.getElementById('bpmDisplay').textContent = String(bpm);
-  // BPM-synced delay (8th note)
-  if (master) master.setDelayTime((60 / bpm) * 0.75);  // dotted 8th note
+  const el = document.getElementById('bpmDisplay');
+  if (el && document.activeElement !== el) el.value = String(bpm);
+  // BPM-synced delay (dotted 8th)
+  if (master) master.setDelayTime((60 / bpm) * 0.75);
 }
 
 function bindTransport() {
@@ -1268,9 +1285,16 @@ function bindTransport() {
   document.getElementById('stopBtn').addEventListener('click', stop);
   document.getElementById('bpmUp').addEventListener('click', () => setBPM(bpm + 1));
   document.getElementById('bpmDown').addEventListener('click', () => setBPM(bpm - 1));
-  document.getElementById('bpmDisplay').addEventListener('click', () => {
-    const v = prompt('BPM (40-240)', String(bpm));
-    if (v) setBPM(parseInt(v, 10) || bpm);
+  const bpmEl = document.getElementById('bpmDisplay');
+  bpmEl.addEventListener('focus', () => bpmEl.select());
+  const commitBpm = () => {
+    const n = parseInt(bpmEl.value, 10);
+    if (Number.isFinite(n)) setBPM(n); else bpmEl.value = String(bpm);
+  };
+  bpmEl.addEventListener('change', commitBpm);
+  bpmEl.addEventListener('blur', commitBpm);
+  bpmEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); bpmEl.blur(); }
   });
   // Machine toggle: button label is the *destination*. 303 view not built
   // yet, so this only flips the label for now; real view switching lands
@@ -1370,31 +1394,13 @@ bindBoot(applyFX);
 setBPM(120);
 requestAnimationFrame(renderLoop);
 
-// Pre-fill a friendly default pattern so first-timers hear something nice
+// Default: kick four-on-the-floor only. Users add the rest.
 (function defaultPattern() {
-  // BD on 1,5,9,13 ; SD on 5,13 ; CH on every off-beat ; CB on a couple ticks
-  const I = (v,s,a=1) => pattern[pIdx(v,s)] = a;
-  // 1-based to 0-based
-  // BD
-  I(0, 0, 2); I(0, 4, 1); I(0, 8, 1); I(0, 12, 1);
-  // SD
-  I(1, 4, 1); I(1, 12, 2);
-  // CH (8ths) — step 14 belongs to OH, so skip it
-  for (let s = 0; s < 16; s += 2) if (s !== 14) I(2, s, 1);
-  // OH off-beat
-  I(3, 14, 1);
-  // CB taste
-  I(5, 10, 1);
-  // CY at downbeat
-  I(6, 0, 1);
-  // Sync UI
+  const I = (v, s, a = 1) => pattern[pIdx(v, s)] = a;
+  I(0, 0, 1); I(0, 4, 1); I(0, 8, 1); I(0, 12, 1);
   for (let v = 0; v < N_VOICES; v++) {
     for (let s = 0; s < N_STEPS; s++) {
-      const st = pattern[pIdx(v,s)];
-      const el = cells[v][s];
-      el.classList.remove('on','accent');
-      if (st === 1) el.classList.add('on');
-      if (st === 2) el.classList.add('accent');
+      syncCellVisual(v, s, pattern[pIdx(v, s)]);
     }
   }
 })();
