@@ -772,11 +772,7 @@ input.display:focus {
   60%  { filter: brightness(1.15); }
   100% { filter: brightness(1.00); }
 }
-/* Two interchangeable classes let us re-trigger the animation on rapid
-   taps without forcing a layout reflow (the `void offsetWidth` trick we
-   used to use stalls the main thread mid-tap on mobile). */
-.ack-flash-a { animation: ackTap 180ms ease-out; }
-.ack-flash-b { animation: ackTap 180ms ease-out; }
+.ack-flash { animation: ackTap 180ms ease-out; }
 
 /* ===== 303 grid (bass synth, monosynth, column-exclusive) ===== */
 .grid-303 {
@@ -1123,14 +1119,12 @@ let ctx = null;
 let master = null;     // master bus object
 let voices = null;     // { bd, sd, ch, oh, cp, cb, cy }
 let trackChannels = null;  // per-voice + bass balance channels (comp + lim)
-let bassLadder = null;     // persistent 303 ladder worklet, reused across phrases
 let workletReady = false;
 let workletSupported = true;
 
-/* Per-track input gain. The actual dynamics work now happens once at the
-   master bus glue stage (cheaper on mobile than running 14 DynamicsCompressor
-   nodes in parallel). Tracks that want a louder seat in the mix get a fixed
-   boost via this single GainNode. */
+/* Per-track input gain. Dynamics work is centralised at the master bus
+   glue stage (cheaper on mobile than 14 parallel DynamicsCompressor
+   nodes), so tracks here are just a Gain node with an optional boost. */
 function makeBoostChannel(ctx, dest, boostDb) {
   const g = ctx.createGain();
   g.gain.value = Math.pow(10, (boostDb || 0) / 20);
@@ -1138,10 +1132,9 @@ function makeBoostChannel(ctx, dest, boostDb) {
   return g;
 }
 
-/* Bass channel: just a high-pass before joining the master bus. Mimics the
-   real 303's signal chain (multiple HPF stages between filter and amp lose
-   the deep bass and give the synth its characteristic bass-light quality).
-   No per-track limiter — the master glue + limiter handle safety. */
+/* Bass channel: high-pass at 80 Hz before joining the master bus, mimicking
+   the real 303's bass-light signal chain. No per-track limiter — the master
+   bus glue + limiter is the safety net. */
 function makeBassChannel(ctx, dest) {
   const input = ctx.createGain();
   const hp = ctx.createBiquadFilter();
@@ -1186,16 +1179,6 @@ async function ensureAudio() {
     };
     voices = createVoices(ctx, trackChannels);
     BASS_DRIVE_CURVE = makeBassDriveCurve();
-    // Persistent ladder filter for all 303 phrases — saves the
-    // AudioWorkletNode construction cost on every new phrase, which was
-    // adding up during fast fill-ins.
-    if (workletReady) {
-      bassLadder = new AudioWorkletNode(ctx, 'ladder', {
-        numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
-      });
-      bassLadder.parameters.get('drive').setValueAtTime(0.30, ctx.currentTime);
-      bassLadder.parameters.get('resonance').setValueAtTime(0.75, ctx.currentTime);
-    }
     master.setReso(options.resonance);
     master.setDelayTime(delaySecondsFromOptions(bpm));
     window.__rhythmMachine = { ctx, master, voices };
@@ -1210,8 +1193,8 @@ function buildMasterBus(ctx) {
   const input = ctx.createGain(); input.gain.value = 1.0;
 
   // master glue: a single gentle DynamicsCompressor + brick-wall limiter
-  // applied to the whole 2-mix. Replaces the 14 per-track compressors that
-  // were saturating the mobile audio thread.
+  // applied to the whole 2-mix. Replaces 14 per-track compressors that
+  // would otherwise saturate the mobile audio thread.
   const glueComp = ctx.createDynamicsCompressor();
   glueComp.threshold.value = -14;
   glueComp.knee.value      = 10;
@@ -1269,7 +1252,7 @@ function buildMasterBus(ctx) {
   const revRet  = ctx.createGain(); revRet.gain.value = 1.0;
   revSend.connect(conv).connect(revRet);
 
-  // master out → final brick-wall limiter → destination
+  // master out → brick-wall limiter → destination
   const out = ctx.createGain(); out.gain.value = 0.9;
   out.connect(glueLim).connect(ctx.destination);
 
@@ -1802,22 +1785,20 @@ function findActiveRow303(step) {
    proper 24 dB/oct response with built-in tanh feedback (so it never
    self-oscillates audibly at the resonance values we use). Fallback is
    two cascaded BiquadFilter LPs sharing the same cutoff envelope. */
-function getBass303Filter(ctx, isAccent) {
-  if (bassLadder) {
-    // Re-use the persistent ladder. Just slide resonance to the per-phrase
-    // value (setTargetAtTime keeps it click-free when phrases overlap).
-    try {
-      bassLadder.parameters.get('resonance').setTargetAtTime(
-        isAccent ? 0.95 : 0.75, ctx.currentTime, 0.005);
-    } catch (_) {}
-    return {
-      node: bassLadder, tail: null,
-      cutoffParam: bassLadder.parameters.get('cutoff'),
-      isShared: true,
-    };
+function build303Filter(ctx, isAccent) {
+  if (workletReady) {
+    const f = new AudioWorkletNode(ctx, 'ladder', {
+      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+    });
+    // Resonance: 0.75 / 0.95 stay below the worklet's k=4 self-osc edge,
+    // squelchy but never a continuous pitched tone. Drive adds 303 grit.
+    f.parameters.get('resonance').setValueAtTime(isAccent ? 0.95 : 0.75, ctx.currentTime);
+    f.parameters.get('drive').setValueAtTime(0.30, ctx.currentTime);
+    return { node: f, tail: null, cutoffParam: f.parameters.get('cutoff') };
   }
-  // Fallback (no AudioWorklet): per-phrase 2-biquad cascade, 24 dB/oct,
-  // Q capped to avoid self-oscillation. Cutoff proxy writes both stages.
+  // Fallback: 2 biquads in series for 24 dB/oct, both Q capped to avoid
+  // self-oscillation. We expose a cutoff "proxy" that writes the same
+  // automation to both stages.
   const a = ctx.createBiquadFilter(); a.type = 'lowpass';
   const b = ctx.createBiquadFilter(); b.type = 'lowpass';
   a.Q.value = isAccent ? 8 : 5;
@@ -1830,7 +1811,7 @@ function getBass303Filter(ctx, isAccent) {
     exponentialRampToValueAtTime(v, t) { a.frequency.exponentialRampToValueAtTime(v, t); b.frequency.exponentialRampToValueAtTime(v, t); },
     get value() { return a.frequency.value; },
   };
-  return { node: a, tail: b, cutoffParam: proxy, isShared: false };
+  return { node: a, tail: b, cutoffParam: proxy };
 }
 
 /* Fixed-time, tempo-independent VCF envelope. Accent gets a brighter peak
@@ -1851,14 +1832,8 @@ function disconnectVoice303(v) {
   if (!v) return;
   try { v.osc.disconnect(); } catch (_) {}
   try { v.shaper.disconnect(); } catch (_) {}
-  if (v.isShared) {
-    // Shared ladder — only sever THIS voice's output tap, leave the
-    // ladder itself connected so the next phrase can reuse it.
-    if (bassLadder) { try { bassLadder.disconnect(v.amp); } catch (_) {} }
-  } else {
-    try { v.filt.disconnect(); } catch (_) {}
-    if (v.tail) { try { v.tail.disconnect(); } catch (_) {} }
-  }
+  try { v.filt.disconnect(); } catch (_) {}
+  if (v.tail) { try { v.tail.disconnect(); } catch (_) {} }
   try { v.amp.disconnect(); } catch (_) {}
 }
 
@@ -1955,7 +1930,7 @@ function schedule303(sourceStep, realStep, time) {
   shaper.curve = BASS_DRIVE_CURVE;
   shaper.oversample = '2x';
 
-  const fb  = getBass303Filter(ctx, isAccent);
+  const fb  = build303Filter(ctx, isAccent);
   const amp = ctx.createGain();
   const peak = isAccent ? AMP_PEAK_A : AMP_PEAK;
   amp.gain.setValueAtTime(0, time);
@@ -1973,7 +1948,6 @@ function schedule303(sourceStep, realStep, time) {
   const voice = {
     osc, shaper, filt: fb.node, tail: fb.tail,
     cutoffParam: fb.cutoffParam, amp,
-    isShared: !!fb.isShared,
     endTime: time + stepDur + 0.002,
   };
 
@@ -2254,16 +2228,11 @@ function buildGrid303() {
 function renderCell303(row, s) {
   const el = cells303[row][s];
   if (!el) return;
-  const i = pIdx303(row, s);
-  const state = pendingPattern303[i];
-  const isPending = state !== pattern303[i] ? 1 : 0;
-  const packed = state | (isPending << 2);
-  if (cellDisplay303[i] === packed) return;
-  cellDisplay303[i] = packed;
+  const state = pendingPattern303[pIdx303(row, s)];
   el.classList.remove('on', 'accent');
   if (state === 1) el.classList.add('on');
   if (state === 2) el.classList.add('accent');
-  el.classList.toggle('pending', !!isPending);
+  el.classList.toggle('pending', cellPending303(row, s));
 }
 
 function relabelBassRows() {
@@ -2278,28 +2247,16 @@ function groupClass(s) {
   return ['grp-a','grp-b','grp-c','grp-d'][g];
 }
 
-// Visual diff state: packs (state | pending<<2) so a single byte tracks
-// the last DOM render. renderCell early-outs if nothing changed, so
-// re-rendering the full grid only touches cells that actually moved.
-const cellDisplay    = new Uint8Array(N_VOICES * N_STEPS);
-const cellDisplay303 = new Uint8Array(N_ROWS_303 * N_STEPS);
-const rowDimState    = new Array(N_VOICES).fill(false);
-// Dirty flags so commits run audio-truth work immediately and defer DOM to
-// requestAnimationFrame — keeps the scheduler tick lean.
-const visualDirty = { cells808: false, cells303: false, ms: false, dim: false, fx: false };
-
 function renderCell(v, s) {
-  const i = pIdx(v, s);
-  const state = pendingPattern[i];
-  const isPending = state !== pattern[i] ? 1 : 0;
-  const packed = state | (isPending << 2);
-  if (cellDisplay[i] === packed) return;
-  cellDisplay[i] = packed;
+  // Visual truth is always the pending pattern; in non-snap mode it equals
+  // the live pattern so this is a no-op visual difference, but the .pending
+  // marker only lights up when they actually diverge (snap mode).
   const el = cells[v][s];
+  const state = pendingPattern[pIdx(v, s)];
   el.classList.remove('on', 'accent');
   if (state === 1) el.classList.add('on');
   if (state === 2) el.classList.add('accent');
-  el.classList.toggle('pending', !!isPending);
+  el.classList.toggle('pending', cellPending(v, s));
 }
 
 function refreshMSButtons(v) {
@@ -2307,34 +2264,6 @@ function refreshMSButtons(v) {
   const sBtn = document.querySelector('.row-label .ms .s[data-v="' + v + '"]');
   if (mBtn) { mBtn.classList.toggle('on', pendingMuted[v]);  mBtn.classList.toggle('pending', pendingMuted[v]  !== muted[v]); }
   if (sBtn) { sBtn.classList.toggle('on', pendingSoloed[v]); sBtn.classList.toggle('pending', pendingSoloed[v] !== soloed[v]); }
-}
-
-/* Drain deferred DOM work. Called from renderLoop (rAF) so it never races
-   the scheduler tick. Each branch is also internally diff-aware via the
-   cellDisplay / rowDimState caches above. */
-function consumeVisualDirty() {
-  if (visualDirty.cells808) {
-    visualDirty.cells808 = false;
-    for (let v = 0; v < N_VOICES; v++)
-      for (let s = 0; s < N_STEPS; s++) renderCell(v, s);
-  }
-  if (visualDirty.cells303) {
-    visualDirty.cells303 = false;
-    for (let r = 0; r < N_ROWS_303; r++)
-      for (let s = 0; s < N_STEPS; s++) renderCell303(r, s);
-  }
-  if (visualDirty.ms) {
-    visualDirty.ms = false;
-    for (let v = 0; v < N_VOICES; v++) refreshMSButtons(v);
-  }
-  if (visualDirty.dim) {
-    visualDirty.dim = false;
-    applyRowDim();
-  }
-  if (visualDirty.fx) {
-    visualDirty.fx = false;
-    updateAllFxPendingMarkers();
-  }
 }
 
 function commitNotesOnly() {
@@ -2346,9 +2275,16 @@ function commitNotesOnly() {
     if (pendingPattern303[i] !== pattern303[i]) { changed303 = true; break; }
   }
   if (!changed808 && !changed303) return;
-  // Audio truth flips immediately — the rest is just visuals.
-  if (changed808) { pattern.set(pendingPattern);       visualDirty.cells808 = true; }
-  if (changed303) { pattern303.set(pendingPattern303); visualDirty.cells303 = true; }
+  if (changed808) {
+    pattern.set(pendingPattern);
+    for (let v = 0; v < N_VOICES; v++)
+      for (let s = 0; s < N_STEPS; s++) renderCell(v, s);
+  }
+  if (changed303) {
+    pattern303.set(pendingPattern303);
+    for (let r = 0; r < N_ROWS_303; r++)
+      for (let s = 0; s < N_STEPS; s++) renderCell303(r, s);
+  }
   recomputeHasPending();
 }
 
@@ -2358,14 +2294,11 @@ function commitTracksOnly() {
     if (pendingMuted[v] !== muted[v] || pendingSoloed[v] !== soloed[v]) {
       muted[v]  = pendingMuted[v];
       soloed[v] = pendingSoloed[v];
+      refreshMSButtons(v);
       changed = true;
     }
   }
-  if (changed) {
-    visualDirty.ms  = true;
-    visualDirty.dim = true;
-    recomputeHasPending();
-  }
+  if (changed) { applyRowDim(); recomputeHasPending(); }
 }
 
 function commitFxOnly() {
@@ -2378,7 +2311,7 @@ function commitFxOnly() {
     }
     pendingFxMode[name] = null;
   }
-  if (changed) { visualDirty.fx = true; recomputeHasPending(); }
+  if (changed) { updateAllFxPendingMarkers(); recomputeHasPending(); }
 }
 
 // Step-driven partial FX commit: each pending effect is committed only when
@@ -2398,7 +2331,7 @@ function maybeCommitFxAtStep(currentStep) {
     }
     pendingFxMode[name] = null;
   }
-  if (changed) { visualDirty.fx = true; recomputeHasPending(); }
+  if (changed) { updateAllFxPendingMarkers(); recomputeHasPending(); }
 }
 
 function commitPending() {
@@ -2431,8 +2364,6 @@ function applyRowDim() {
   for (let v = 0; v < N_VOICES; v++) {
     const audible = anySolo ? (soloed[v] && !muted[v]) : !muted[v];
     const dim = !audible;
-    if (rowDimState[v] === dim) continue;   // skip rows that didn't change
-    rowDimState[v] = dim;
     for (let s = 0; s < N_STEPS; s++) {
       cells[v][s].classList.toggle('row-dim', dim);
     }
@@ -2581,9 +2512,6 @@ function bindFX() {
 let lastColStep = -1;   // last column highlighted by the .cur ring
 
 function renderLoop() {
-  // Drain any deferred DOM work first — kept out of the scheduler tick so
-  // a busy commit can't push audio scheduling past the lookahead.
-  consumeVisualDirty();
   if (ctx && isPlaying) {
     const now = ctx.currentTime;
     let ledStep = -1;
@@ -2854,16 +2782,9 @@ const ACK_SELECTOR =
   '.fx-reset, input[type=range], input.display';
 
 function ackTap(el) {
-  // Alternate between two equivalent animation classes — applying a
-  // different class always triggers the animation from the start, without
-  // the synchronous reflow that `void el.offsetWidth` would force.
-  if (el.classList.contains('ack-flash-a')) {
-    el.classList.remove('ack-flash-a');
-    el.classList.add('ack-flash-b');
-  } else {
-    el.classList.remove('ack-flash-b');
-    el.classList.add('ack-flash-a');
-  }
+  el.classList.remove('ack-flash');
+  void el.offsetWidth;   // force reflow so the animation restarts on rapid taps
+  el.classList.add('ack-flash');
   if (navigator.vibrate) { try { navigator.vibrate(8); } catch (_) {} }
 }
 
@@ -2874,10 +2795,7 @@ function bindAckFeedback() {
     ackTap(t);
   }, { passive: true });
   document.addEventListener('animationend', (e) => {
-    if (e.animationName === 'ackTap') {
-      e.target.classList.remove('ack-flash-a');
-      e.target.classList.remove('ack-flash-b');
-    }
+    if (e.animationName === 'ackTap') e.target.classList.remove('ack-flash');
   });
 }
 
