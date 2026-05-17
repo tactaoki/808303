@@ -951,6 +951,15 @@ input.display:focus {
     </section>
 
     <section class="opt-section">
+      <div class="opt-label">FILL IN RATE</div>
+      <div class="opt-row">
+        <button class="btn ctrl" data-fill-rate="4">1/4</button>
+        <button class="btn ctrl" data-fill-rate="8">1/8</button>
+        <button class="btn ctrl" data-fill-rate="16">1/16</button>
+      </div>
+    </section>
+
+    <section class="opt-section">
       <div class="opt-label">FILTER RESONANCE</div>
       <div class="slider opt-slider">
         <div class="lbl">Mild</div>
@@ -1636,6 +1645,8 @@ const DEFAULTS = {
   bassKey: 'A',
   bassMode: 'minor',
   bassWave: 'sawtooth',     // sawtooth is the iconic 303 voice
+  // FILL IN repeat rate: 4 = quarter, 8 = 8th, 16 = 16th notes
+  fillRate: 16,
 };
 const options = { ...DEFAULTS };
 
@@ -1958,13 +1969,21 @@ function scheduleStep(step, time) {
   // While fill is held, sound comes from the frozen step; the LED still
   // tracks the real step so the user sees where playback will resume.
   const sourceStep = fillActive ? fillStep : step;
-  for (let v = 0; v < N_VOICES; v++) {
-    const state = pattern[pIdx(v, sourceStep)];
-    if (state === 0) continue;
-    if (!isAudible(v)) continue;
-    voices[v](time, state === 2);
+  // Fill rate gating: 16ths fire every step (default), 8ths fire every
+  // second step, quarters fire every fourth step — aligned to musical bar
+  // boundaries (step 0, 4, 8, 12 for 1/4; 0, 2, 4… for 1/8). The internal
+  // step counter still advances every 16th, only the trigger is skipped.
+  const fillStride = fillActive ? Math.max(1, Math.round(16 / options.fillRate)) : 1;
+  const shouldTrigger = !fillActive || (step % fillStride === 0);
+  if (shouldTrigger) {
+    for (let v = 0; v < N_VOICES; v++) {
+      const state = pattern[pIdx(v, sourceStep)];
+      if (state === 0) continue;
+      if (!isAudible(v)) continue;
+      voices[v](time, state === 2);
+    }
+    schedule303(sourceStep, step, time);
   }
-  schedule303(sourceStep, step, time);
   visualQueue.push({ step, time });
 }
 
@@ -2668,8 +2687,14 @@ function refreshBassUI() {
     btn.classList.toggle('active', btn.dataset.bassWave === options.bassWave);
   });
 }
+function refreshFillRateUI() {
+  document.querySelectorAll('[data-fill-rate]').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.fillRate, 10) === options.fillRate);
+  });
+}
 function refreshOptionsUI() {
   refreshDelayUI();
+  refreshFillRateUI();
   refreshSnapUI();
   refreshBassUI();
   document.getElementById('optReso').value = Math.round(options.resonance * 1000);
@@ -2700,6 +2725,14 @@ function initOptions() {
   document.getElementById('optReso').addEventListener('input', (e) => {
     options.resonance = parseFloat(e.target.value) / 1000;
     if (master) master.setReso(options.resonance);
+  });
+
+  // FILL IN rate (1/4, 1/8, 1/16)
+  document.querySelectorAll('[data-fill-rate]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      options.fillRate = parseInt(btn.dataset.fillRate, 10) || 16;
+      refreshFillRateUI();
+    });
   });
 
   buildSnapGrid();
