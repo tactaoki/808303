@@ -658,6 +658,13 @@ input.display:focus {
   gap: 5px;
 }
 .options-overlay #bassKeyRow .btn { flex: none; min-width: 0; min-height: 32px; padding: 6px 4px; }
+/* Lead key picker: 7 cols × 2 rows = SYNC + 12 keys. */
+.options-overlay #leadKeyRow {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 5px;
+}
+.options-overlay #leadKeyRow .btn { flex: none; min-width: 0; min-height: 32px; padding: 6px 4px; }
 /* Snap grid: one row per category, four mode pills + leading label. */
 .options-overlay .snap-grid { display: grid; gap: 4px; }
 .options-overlay .snap-row {
@@ -880,6 +887,51 @@ input.display:focus {
   background: #0a0a0c;
 }
 
+/* ===== LEAD (warm copper/orange) theme — monosynth view ===== */
+.panel[data-machine="lead"] {
+  --bg-panel:       #d8a878;
+  --bg-panel-dark:  #b07c4a;
+  --bg-panel-deep:  #8a5824;
+  --bg-wood:        #2a1810;
+  --bg-wood-light:  #3a2218;
+  --ink:            #1a0d04;
+  --ink-soft:       #2a1810;
+}
+.panel[data-machine="lead"] .brand {
+  background: linear-gradient(180deg, #3a2218 0%, #1a0d04 100%);
+  color: #ffe4b0;
+  box-shadow: inset 0 -2px 0 #000;
+}
+.panel[data-machine="lead"] .brand .model {
+  font-style: normal;
+  letter-spacing: .08em;
+}
+.panel[data-machine="lead"] .header {
+  background: linear-gradient(180deg, rgba(0,0,0,.10), rgba(0,0,0,0));
+}
+.panel[data-machine="lead"] .step-leds {
+  background: linear-gradient(180deg, rgba(0,0,0,.18), rgba(0,0,0,0));
+}
+.panel[data-machine="lead"] .fx {
+  background:
+    linear-gradient(180deg, rgba(0,0,0,.08), rgba(0,0,0,0)),
+    var(--bg-panel-dark);
+}
+.panel[data-machine="lead"] .display {
+  background: #0a0a0c;
+}
+
+/* LEAD grid placeholder — populated in a later commit. Mirrors the 303
+   layout so the empty panel stays visually balanced. */
+.grid-lead {
+  display: grid;
+  grid-template-columns: clamp(46px, 7vw, 60px) repeat(16, minmax(0, 1fr));
+  gap: 3px;
+  height: 100%;
+  min-width: 0;
+}
+.grid-lead.hidden { display: none; }
+
 /* Tighter layout for short screens */
 @media (max-height: 380px) {
   .panel { margin: 4px 22px; }
@@ -916,6 +968,7 @@ input.display:focus {
     <section class="grid-wrap">
       <div class="grid"     id="grid"></div>
       <div class="grid-303 hidden" id="grid303"></div>
+      <div class="grid-lead hidden" id="gridLead"></div>
     </section>
 
     <!-- Master FX -->
@@ -990,6 +1043,25 @@ input.display:focus {
       <div class="opt-row">
         <button class="btn ctrl" data-bass-wave="sawtooth">Sawtooth</button>
         <button class="btn ctrl" data-bass-wave="square">Square</button>
+      </div>
+    </section>
+
+    <section class="opt-section">
+      <div class="opt-label">LEAD · KEY</div>
+      <div class="opt-row" id="leadKeyRow"></div>
+      <div class="opt-label" style="margin-top:8px">LEAD · SCALE</div>
+      <div class="opt-row">
+        <button class="btn ctrl" data-lead-mode="sync">Sync 303</button>
+        <button class="btn ctrl" data-lead-mode="minor">Minor</button>
+        <button class="btn ctrl" data-lead-mode="major">Major</button>
+      </div>
+      <div class="opt-label" style="margin-top:8px">LEAD · LFO RATE</div>
+      <div class="opt-row" id="leadLfoDenomRow"></div>
+      <div class="opt-row" id="leadLfoDottedRow"></div>
+      <div class="opt-label" style="margin-top:8px">LEAD · PORTAMENTO</div>
+      <div class="opt-row">
+        <button class="btn ctrl" data-lead-porta="off">Off</button>
+        <button class="btn ctrl" data-lead-porta="on">On (60ms)</button>
       </div>
     </section>
 
@@ -1649,6 +1721,12 @@ const DEFAULTS = {
   bassKey: 'A',
   bassMode: 'minor',
   bassWave: 'sawtooth',     // sawtooth is the iconic 303 voice
+  // Lead synth (LEAD view). 'sync' values follow the 303 setting.
+  leadKey:       'sync',
+  leadMode:      'sync',
+  leadLfoDenom:  8,
+  leadLfoDotted: false,
+  leadPorta:     'off',
   // FILL IN repeat rate: 4 = quarter, 8 = 8th, 16 = 16th notes
   fillRate: 16,
 };
@@ -2433,17 +2511,22 @@ function bindTransport() {
   document.getElementById('pageToggle').addEventListener('click', switchMachine);
 }
 
+const MACHINE_ORDER = ['808', '303', 'lead'];
+const MACHINE_BRAND = { '808': 'Rhythm', '303': 'Bass', 'lead': 'Lead' };
+const MACHINE_LABEL = { '808': '808',    '303': '303',  'lead': 'LEAD' };
 let currentMachine = '808';
 function switchMachine() {
-  currentMachine = currentMachine === '808' ? '303' : '808';
+  const idx = MACHINE_ORDER.indexOf(currentMachine);
+  currentMachine = MACHINE_ORDER[(idx + 1) % MACHINE_ORDER.length];
   document.querySelector('.panel').dataset.machine = currentMachine;
   const brand = document.querySelector('.brand .model');
-  if (brand) brand.textContent = currentMachine === '808' ? 'Rhythm' : 'Bass';
-  document.getElementById('grid').classList.toggle('hidden', currentMachine !== '808');
-  document.getElementById('grid303').classList.toggle('hidden', currentMachine !== '303');
+  if (brand) brand.textContent = MACHINE_BRAND[currentMachine];
+  document.getElementById('grid').    classList.toggle('hidden', currentMachine !== '808');
+  document.getElementById('grid303'). classList.toggle('hidden', currentMachine !== '303');
+  document.getElementById('gridLead').classList.toggle('hidden', currentMachine !== 'lead');
   // Button label always shows the *destination* machine.
-  document.getElementById('pageToggle').textContent =
-    currentMachine === '808' ? '303' : '808';
+  const next = MACHINE_ORDER[(MACHINE_ORDER.indexOf(currentMachine) + 1) % MACHINE_ORDER.length];
+  document.getElementById('pageToggle').textContent = MACHINE_LABEL[next];
 }
 
 /* ---------- FX sliders ---------- */
@@ -2708,11 +2791,29 @@ function refreshFillRateUI() {
     btn.classList.toggle('active', parseInt(btn.dataset.fillRate, 10) === options.fillRate);
   });
 }
+function refreshLeadUI() {
+  document.querySelectorAll('#leadKeyRow .btn').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.leadKey === options.leadKey);
+  });
+  document.querySelectorAll('[data-lead-mode]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.leadMode === options.leadMode);
+  });
+  document.querySelectorAll('#leadLfoDenomRow .btn, #leadLfoDottedRow .btn').forEach(btn => {
+    const d = parseInt(btn.dataset.denom, 10);
+    const dot = btn.dataset.dotted === '1';
+    btn.classList.toggle('active',
+      d === options.leadLfoDenom && dot === options.leadLfoDotted);
+  });
+  document.querySelectorAll('[data-lead-porta]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.leadPorta === options.leadPorta);
+  });
+}
 function refreshOptionsUI() {
   refreshDelayUI();
   refreshFillRateUI();
   refreshSnapUI();
   refreshBassUI();
+  refreshLeadUI();
   document.getElementById('optReso').value = Math.round(options.resonance * 1000);
 }
 
@@ -2777,6 +2878,49 @@ function initOptions() {
   document.querySelectorAll('[data-bass-wave]').forEach(btn => {
     btn.addEventListener('click', () => {
       options.bassWave = btn.dataset.bassWave;
+      refreshOptionsUI();
+    });
+  });
+
+  // Lead synth — Key (SYNC + 12 keys), Mode, LFO subdivision, Portamento.
+  // Audio wiring lands in a later commit; this only persists the choices.
+  const leadKeyRow = document.getElementById('leadKeyRow');
+  const LEAD_KEYS = ['sync', ...KEYS_LAYOUT];
+  LEAD_KEYS.forEach(k => {
+    const b = document.createElement('button');
+    b.className = 'btn ctrl';
+    b.dataset.leadKey = k;
+    b.textContent = k === 'sync' ? 'Sync' : k;
+    b.addEventListener('click', () => {
+      options.leadKey = k;
+      refreshOptionsUI();
+    });
+    leadKeyRow.appendChild(b);
+  });
+  document.querySelectorAll('[data-lead-mode]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      options.leadMode = btn.dataset.leadMode;
+      refreshOptionsUI();
+    });
+  });
+  const leadDenomRow  = document.getElementById('leadLfoDenomRow');
+  const leadDottedRow = document.getElementById('leadLfoDottedRow');
+  DELAY_SPEC.forEach(spec => {
+    const b = document.createElement('button');
+    b.className = 'btn';
+    b.textContent = spec.label;
+    b.dataset.denom = String(spec.denom);
+    b.dataset.dotted = spec.dotted ? '1' : '0';
+    b.addEventListener('click', () => {
+      options.leadLfoDenom  = spec.denom;
+      options.leadLfoDotted = spec.dotted;
+      refreshOptionsUI();
+    });
+    (spec.dotted ? leadDottedRow : leadDenomRow).appendChild(b);
+  });
+  document.querySelectorAll('[data-lead-porta]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      options.leadPorta = btn.dataset.leadPorta;
       refreshOptionsUI();
     });
   });
