@@ -408,10 +408,46 @@ input.display:focus {
 }
 .slider {
   display: grid;
-  grid-template-columns: clamp(40px, 6vw, 56px) 1fr;
+  grid-template-columns: clamp(36px, 5vw, 50px) 1fr auto;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
+}
+.fx-reset {
+  width: 22px; height: 22px;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  background: linear-gradient(180deg, #efe2c2 0%, #c9b88f 100%);
+  color: var(--ink);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.6),
+    inset 0 -2px 0 rgba(0,0,0,.18),
+    0 1px 0 rgba(0,0,0,.25);
+  flex: 0 0 auto;
+  user-select: none;
+}
+.fx-reset:active { transform: translateY(1px) scale(.96); box-shadow: inset 0 2px 4px rgba(0,0,0,.3); }
+/* Effects-snap visual cue: orange glow on the thumb + label tint while
+   pendingFx differs from liveFx for this slider. */
+.slider.pending .lbl { color: var(--accent-red); }
+.slider.pending input[type=range]::-webkit-slider-thumb {
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.7),
+    inset 0 -1px 0 rgba(0,0,0,.25),
+    0 0 8px var(--accent-orange),
+    0 0 14px rgba(255,138,31,.45);
+}
+.slider.pending input[type=range]::-moz-range-thumb {
+  box-shadow: 0 0 8px var(--accent-orange);
 }
 .slider .lbl {
   font-size: clamp(8px, 1.1vw, 10px);
@@ -760,10 +796,10 @@ input.display:focus {
     <footer class="fx">
       <button class="fill-btn" id="fillBtn" aria-label="Fill-in (hold)">FILL<br>IN</button>
       <div class="fx-grid">
-        <div class="slider"><div class="lbl">Drive</div> <input type="range" min="0" max="1000" value="0"    id="fxDrive"></div>
-        <div class="slider"><div class="lbl">Cutoff</div><input type="range" min="0" max="1000" value="1000" id="fxCutoff"></div>
-        <div class="slider"><div class="lbl">Delay</div> <input type="range" min="0" max="1000" value="0"    id="fxDelay"></div>
-        <div class="slider"><div class="lbl">Reverb</div><input type="range" min="0" max="1000" value="0"    id="fxReverb"></div>
+        <div class="slider"><div class="lbl">Drive</div> <input type="range" min="0" max="1000" value="0"    id="fxDrive"><button class="fx-reset" data-fx="drive"  aria-label="Reset Drive">↺</button></div>
+        <div class="slider"><div class="lbl">Cutoff</div><input type="range" min="0" max="1000" value="1000" id="fxCutoff"><button class="fx-reset" data-fx="cutoff" aria-label="Reset Cutoff">↺</button></div>
+        <div class="slider"><div class="lbl">Delay</div> <input type="range" min="0" max="1000" value="0"    id="fxDelay"><button class="fx-reset" data-fx="delay"  aria-label="Reset Delay">↺</button></div>
+        <div class="slider"><div class="lbl">Reverb</div><input type="range" min="0" max="1000" value="0"    id="fxReverb"><button class="fx-reset" data-fx="reverb" aria-label="Reset Reverb">↺</button></div>
       </div>
       <nav class="page-nav">
         <button class="page-btn" id="pageToggle" aria-label="Switch machine">303</button>
@@ -808,12 +844,13 @@ input.display:focus {
     </section>
 
     <section class="opt-section">
-      <div class="opt-label">EDIT TIMING</div>
+      <div class="opt-label">SNAP TO LOOP START</div>
       <div class="opt-row">
-        <button class="btn ctrl"        id="snapOff">Immediate</button>
-        <button class="btn ctrl active" id="snapOn">Snap to loop start</button>
+        <button class="btn ctrl snap-pill" data-snap="Notes">Notes</button>
+        <button class="btn ctrl snap-pill" data-snap="Tracks">Tracks</button>
+        <button class="btn ctrl snap-pill" data-snap="Effects">Effects</button>
       </div>
-      <div class="opt-hint">When "Snap" is on, note &amp; M/S edits apply at the next bar.</div>
+      <div class="opt-hint">When on, edits in that category apply at the next bar; otherwise immediately.</div>
     </section>
 
     <footer class="opt-foot">
@@ -1335,17 +1372,33 @@ const pattern = new Uint8Array(N_VOICES * N_STEPS); // 0=off, 1=on, 2=accent (au
 const muted   = new Array(N_VOICES).fill(false);
 const soloed  = new Array(N_VOICES).fill(false);
 
-// Pending mirrors. When options.snapEdits=false these stay in lockstep with
-// the live arrays. When true, edits go to pending only and get committed
-// when the sequencer wraps back to step 0.
+// Pending mirrors. When the relevant per-category snap flag is off these
+// stay in lockstep with the live arrays. When on, edits in that category
+// go to pending only and are committed when the sequencer wraps to step 0.
 const pendingPattern = new Uint8Array(N_VOICES * N_STEPS);
 const pendingMuted   = new Array(N_VOICES).fill(false);
 const pendingSoloed  = new Array(N_VOICES).fill(false);
 let hasPending = false;
 
 /* ----- Options (driven by the Options overlay) ----- */
-const DEFAULTS = { delayDenom: 8, delayDotted: true, resonance: 0.5, snapEdits: true };
+const DEFAULTS = {
+  delayDenom: 8, delayDotted: true,
+  resonance: 0.5,
+  // Snap-to-loop-start is set per category. Notes & Tracks default to
+  // snap=on for musical-bar editing; Effects default to snap=off so
+  // sweeps and filter twiddles feel responsive.
+  snapNotes: true,
+  snapTracks: true,
+  snapEffects: false,
+};
 const options = { ...DEFAULTS };
+
+/* ----- FX state (live = currently audible, pending = waiting for bar) ----- */
+const FX_NAMES = ['drive','cutoff','delay','reverb'];
+const FX_DEFAULTS = { drive: 0, cutoff: 1000, delay: 0, reverb: 0 };  // slider scale 0..1000
+const liveFx    = { ...FX_DEFAULTS };
+const pendingFx = { ...FX_DEFAULTS };
+const FX_ELEMENTS = {};   // populated by bindFX()
 
 function delaySecondsFromOptions(bpmVal) {
   const sixteenth = (60 / bpmVal) / 4;
@@ -1385,6 +1438,9 @@ function recomputeHasPending() {
     if (pendingMuted[v] !== muted[v] || pendingSoloed[v] !== soloed[v]) {
       hasPending = true; return;
     }
+  }
+  for (const name of FX_NAMES) {
+    if (pendingFx[name] !== liveFx[name]) { hasPending = true; return; }
   }
   hasPending = false;
 }
@@ -1576,7 +1632,7 @@ function buildUI() {
     const v = parseInt(t.dataset.v, 10);
     const s = parseInt(t.dataset.s, 10);
     let res;
-    if (options.snapEdits) {
+    if (options.snapNotes) {
       // Edit the pending pattern only; audio keeps using live pattern.
       res = cycleCellOn(pendingPattern, v, s);
     } else {
@@ -1599,7 +1655,7 @@ function buildUI() {
     const t = ev.target;
     if (!t.dataset || !t.dataset.act) return;
     const v = parseInt(t.dataset.v, 10);
-    if (options.snapEdits) {
+    if (options.snapTracks) {
       if (t.dataset.act === 'm') pendingMuted[v]  = !pendingMuted[v];
       else                       pendingSoloed[v] = !pendingSoloed[v];
     } else {
@@ -1607,7 +1663,7 @@ function buildUI() {
       else                       { soloed[v] = !soloed[v]; pendingSoloed[v] = soloed[v]; }
     }
     refreshMSButtons(v);
-    if (!options.snapEdits) applyRowDim();
+    if (!options.snapTracks) applyRowDim();
     recomputeHasPending();
   });
 }
@@ -1636,22 +1692,52 @@ function refreshMSButtons(v) {
   if (sBtn) { sBtn.classList.toggle('on', pendingSoloed[v]); sBtn.classList.toggle('pending', pendingSoloed[v] !== soloed[v]); }
 }
 
-function commitPending() {
+function commitNotesOnly() {
+  let changed = false;
+  for (let i = 0; i < pattern.length; i++) {
+    if (pendingPattern[i] !== pattern[i]) { changed = true; break; }
+  }
+  if (!changed) return;
   pattern.set(pendingPattern);
   for (let v = 0; v < N_VOICES; v++) {
-    muted[v]  = pendingMuted[v];
-    soloed[v] = pendingSoloed[v];
-  }
-  hasPending = false;
-  for (let v = 0; v < N_VOICES; v++) {
     for (let s = 0; s < N_STEPS; s++) renderCell(v, s);
-    refreshMSButtons(v);
   }
-  applyRowDim();
+  recomputeHasPending();
+}
+
+function commitTracksOnly() {
+  let changed = false;
+  for (let v = 0; v < N_VOICES; v++) {
+    if (pendingMuted[v] !== muted[v] || pendingSoloed[v] !== soloed[v]) {
+      muted[v]  = pendingMuted[v];
+      soloed[v] = pendingSoloed[v];
+      refreshMSButtons(v);
+      changed = true;
+    }
+  }
+  if (changed) { applyRowDim(); recomputeHasPending(); }
+}
+
+function commitFxOnly() {
+  let changed = false;
+  for (const name of FX_NAMES) {
+    if (pendingFx[name] !== liveFx[name]) {
+      liveFx[name] = pendingFx[name];
+      if (master) applyFxToAudio(name, liveFx[name]);
+      changed = true;
+    }
+  }
+  if (changed) { updateAllFxPendingMarkers(); recomputeHasPending(); }
+}
+
+function commitPending() {
+  commitNotesOnly();
+  commitTracksOnly();
+  commitFxOnly();
 }
 
 function clearAllNotes() {
-  if (options.snapEdits) {
+  if (options.snapNotes) {
     pendingPattern.fill(0);
   } else {
     pattern.fill(0);
@@ -1731,33 +1817,70 @@ function switchMachine() {
 /* ---------- FX sliders ---------- */
 
 const SLIDER_MAX = 1000;
-const sliderVal = (el) => parseFloat(el.value) / SLIDER_MAX;
+
+function applyFxToAudio(name, sliderValue) {
+  if (!master) return;
+  const v = sliderValue / SLIDER_MAX;
+  if (name === 'drive')       master.setDrive(v);
+  else if (name === 'cutoff') master.setCutoff(30 * Math.pow(18000 / 30, v));  // log
+  else if (name === 'delay')  master.setDelay(v);
+  else if (name === 'reverb') master.setReverb(v);
+}
+
+function updateFxPendingMarker(name) {
+  const el = FX_ELEMENTS[name];
+  if (!el) return;
+  el.parentElement.classList.toggle('pending', pendingFx[name] !== liveFx[name]);
+}
+function updateAllFxPendingMarkers() {
+  for (const name of FX_NAMES) updateFxPendingMarker(name);
+}
+
+function onFxInput(name, sliderValue) {
+  pendingFx[name] = sliderValue;
+  if (!options.snapEffects) {
+    liveFx[name] = sliderValue;
+    applyFxToAudio(name, sliderValue);
+  }
+  updateFxPendingMarker(name);
+  recomputeHasPending();
+}
+
+function resetFx(name) {
+  // Immediate — bypasses snap deliberately so the reset acts as a panic
+  // button. Doesn't touch DEFAULTS / options; only this slider's live and
+  // pending positions are restored.
+  const def = FX_DEFAULTS[name];
+  const el  = FX_ELEMENTS[name];
+  if (el) el.value = String(def);
+  pendingFx[name] = def;
+  liveFx[name]    = def;
+  applyFxToAudio(name, def);
+  updateFxPendingMarker(name);
+  recomputeHasPending();
+}
 
 function bindFX() {
-  const drv = document.getElementById('fxDrive');
-  const cut = document.getElementById('fxCutoff');
-  const dly = document.getElementById('fxDelay');
-  const rev = document.getElementById('fxReverb');
-
-  const applyAll = () => {
-    if (!master) return;
-    master.setDrive(sliderVal(drv));
-    // log-mapped cutoff 30Hz..18kHz
-    const c = sliderVal(cut);
-    const hz = 30 * Math.pow(18000/30, c);
-    master.setCutoff(hz);
-    master.setDelay(sliderVal(dly));
-    master.setReverb(sliderVal(rev));
-  };
-
-  for (const el of [drv, cut, dly, rev]) {
+  const ids = { drive: 'fxDrive', cutoff: 'fxCutoff', delay: 'fxDelay', reverb: 'fxReverb' };
+  for (const [name, id] of Object.entries(ids)) {
+    const el = document.getElementById(id);
+    FX_ELEMENTS[name] = el;
+    pendingFx[name] = liveFx[name] = parseFloat(el.value);
     el.addEventListener('input', async () => {
       await ensureAudio();
-      applyAll();
+      onFxInput(name, parseFloat(el.value));
     });
   }
-  // initial idempotent apply once audio is up
-  return applyAll;
+  document.querySelectorAll('.fx-reset').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      await ensureAudio();
+      resetFx(btn.dataset.fx);
+    });
+  });
+  // Idempotent applier: sync current liveFx to audio after ensureAudio.
+  return () => {
+    for (const name of FX_NAMES) applyFxToAudio(name, liveFx[name]);
+  };
 }
 
 /* ---------- step LED render loop ---------- */
@@ -1850,18 +1973,35 @@ function pickDelay(denom, dotted) {
   refreshDelayUI();
 }
 
-function setSnap(on) {
-  if (on === options.snapEdits) return;
-  if (options.snapEdits && !on && hasPending) commitPending();
-  if (!options.snapEdits && on) {
-    pendingPattern.set(pattern);
-    for (let v = 0; v < N_VOICES; v++) {
-      pendingMuted[v]  = muted[v];
-      pendingSoloed[v] = soloed[v];
+// Per-category snap toggle. cat ∈ {'Notes','Tracks','Effects'}.
+// off→on: re-sync this category's pending mirror to live (no spurious
+// pending state). on→off: commit only this category's pending edits so
+// they don't get stranded.
+function toggleSnap(cat) {
+  const key = 'snap' + cat;
+  const next = !options[key];
+  if (options[key] && !next) {
+    if      (cat === 'Notes')   commitNotesOnly();
+    else if (cat === 'Tracks')  commitTracksOnly();
+    else if (cat === 'Effects') commitFxOnly();
+  } else if (!options[key] && next) {
+    if (cat === 'Notes') {
+      pendingPattern.set(pattern);
+      for (let v = 0; v < N_VOICES; v++)
+        for (let s = 0; s < N_STEPS; s++) renderCell(v, s);
+    } else if (cat === 'Tracks') {
+      for (let v = 0; v < N_VOICES; v++) {
+        pendingMuted[v]  = muted[v];
+        pendingSoloed[v] = soloed[v];
+        refreshMSButtons(v);
+      }
+    } else if (cat === 'Effects') {
+      for (const n of FX_NAMES) pendingFx[n] = liveFx[n];
+      updateAllFxPendingMarkers();
     }
-    hasPending = false;
+    recomputeHasPending();
   }
-  options.snapEdits = on;
+  options[key] = next;
   refreshSnapUI();
 }
 
@@ -1876,8 +2016,10 @@ function refreshDelayUI() {
   document.getElementById('delayActiveLbl').textContent = spec ? spec.label : '?';
 }
 function refreshSnapUI() {
-  document.getElementById('snapOff').classList.toggle('active', !options.snapEdits);
-  document.getElementById('snapOn').classList.toggle('active',  options.snapEdits);
+  for (const cat of ['Notes','Tracks','Effects']) {
+    const btn = document.querySelector(`.snap-pill[data-snap="${cat}"]`);
+    if (btn) btn.classList.toggle('active', !!options['snap' + cat]);
+  }
 }
 function refreshOptionsUI() {
   refreshDelayUI();
@@ -1912,12 +2054,13 @@ function initOptions() {
     if (master) master.setReso(options.resonance);
   });
 
-  document.getElementById('snapOff').addEventListener('click', () => setSnap(false));
-  document.getElementById('snapOn').addEventListener('click',  () => setSnap(true));
+  document.querySelectorAll('.snap-pill').forEach(btn => {
+    btn.addEventListener('click', () => toggleSnap(btn.dataset.snap));
+  });
 
   document.getElementById('optReset').addEventListener('click', () => {
     // Don't strand the user's in-progress edits.
-    if (options.snapEdits && hasPending) commitPending();
+    if (hasPending) commitPending();
     Object.assign(options, DEFAULTS);
     applyDelayFromOptions();
     if (master) master.setReso(options.resonance);
@@ -1934,7 +2077,7 @@ function initOptions() {
 
 const ACK_SELECTOR =
   '.btn, .cell, .row-label .ms button, .page-btn, .fill-btn, ' +
-  'input[type=range], input.display';
+  '.fx-reset, input[type=range], input.display';
 
 function ackTap(el) {
   el.classList.remove('ack-flash');
