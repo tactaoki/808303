@@ -1341,46 +1341,20 @@ function buildMasterBus(ctx) {
   };
   // Combined delay knob: a single slider controls both send/mix and feedback,
   // shaped so 0 = bypass and 1 = lush near-runaway tail without diverging.
-  // Disconnect dlySend → delay entirely when mix is essentially zero so the
-  // DelayNode + feedback loop doesn't run.
-  let _delayActive = true;   // graph wired by default during buildMasterBus
+  // We deliberately keep dlySend → delay wired at all times — dynamically
+  // disconnecting was found to cause iOS Safari's audio buffer to grow and
+  // introduce multi-beat sync drift between LEDs and what the speaker hears.
   const setDelay = (v01) => {
     const v = Math.max(0, Math.min(1, v01));
-    const mix = v * 0.75;
-    const feedback = v * 0.78;
-    dlySend.gain.setTargetAtTime(mix, ctx.currentTime, 0.02);
-    fb.gain.setTargetAtTime(feedback, ctx.currentTime, 0.02);
-    const wantActive = v > 0.005;
-    if (wantActive && !_delayActive) {
-      try { dlySend.connect(delay); } catch(_) {}
-      _delayActive = true;
-    } else if (!wantActive && _delayActive) {
-      // small delay so the gain ramp can run to zero before we cut the chain
-      setTimeout(() => {
-        if (!_delayActive) return;
-        try { dlySend.disconnect(delay); } catch(_) {}
-        _delayActive = false;
-      }, 60);
-    }
+    dlySend.gain.setTargetAtTime(v * 0.75, ctx.currentTime, 0.02);
+    fb.gain.setTargetAtTime(v * 0.78,    ctx.currentTime, 0.02);
   };
   const setDelayTime = (sec) => {
     delay.delayTime.setTargetAtTime(Math.max(0.01, Math.min(2.0, sec)), ctx.currentTime, 0.02);
   };
-  let _reverbActive = true;
   const setReverb = (v01) => {
     const v = Math.max(0, Math.min(1, v01));
     revSend.gain.setTargetAtTime(v * 0.9, ctx.currentTime, 0.02);
-    const wantActive = v > 0.005;
-    if (wantActive && !_reverbActive) {
-      try { revSend.connect(conv); } catch(_) {}
-      _reverbActive = true;
-    } else if (!wantActive && _reverbActive) {
-      setTimeout(() => {
-        if (!_reverbActive) return;
-        try { revSend.disconnect(conv); } catch(_) {}
-        _reverbActive = false;
-      }, 60);
-    }
   };
 
   return {
@@ -2592,7 +2566,12 @@ let lastColStep = -1;   // last column highlighted by the .cur ring
 
 function renderLoop() {
   if (ctx && isPlaying) {
-    const now = ctx.currentTime;
+    // ctx.currentTime is when audio has been *rendered*. The speaker hears
+    // it ctx.outputLatency later, so subtract that to align the visual
+    // playhead with what the user actually hears. iOS Safari and Bluetooth
+    // outputs in particular can add hundreds of ms of latency. Browsers
+    // without outputLatency support return undefined → fall back to 0.
+    const now = ctx.currentTime - (ctx.outputLatency || 0);
     let ledStep = -1;
     while (visualQueue.length > 0 && visualQueue[0].time <= now) {
       const { step } = visualQueue.shift();
