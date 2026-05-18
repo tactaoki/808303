@@ -1794,6 +1794,9 @@ const pendingPattern = new Uint8Array(N_VOICES * N_STEPS);
 const pendingMuted   = new Array(N_VOICES).fill(false);
 const pendingSoloed  = new Array(N_VOICES).fill(false);
 let hasPending = false;
+let hasPendingNotes  = false;
+let hasPendingTracks = false;
+let hasPendingFx     = false;
 
 /* ----- 303 (bass) pattern data ----- */
 const N_ROWS_303 = 7;
@@ -1983,25 +1986,40 @@ const cellPending303 = (row, s) => pendingPattern303[pIdx303(row, s)] !== patter
 const cellPendingLead = (row, s) => pendingPatternLead[pIdxLead(row, s)] !== patternLead[pIdxLead(row, s)];
 const msPending   = (v) => pendingMuted[v] !== muted[v] || pendingSoloed[v] !== soloed[v];
 
-function recomputeHasPending() {
+function rollupHasPending() {
+  hasPending = hasPendingNotes || hasPendingTracks || hasPendingFx;
+}
+function recomputeHasPendingNotes() {
   for (let i = 0; i < pattern.length; i++) {
-    if (pendingPattern[i] !== pattern[i]) { hasPending = true; return; }
+    if (pendingPattern[i] !== pattern[i]) { hasPendingNotes = true; rollupHasPending(); return; }
   }
   for (let i = 0; i < pattern303.length; i++) {
-    if (pendingPattern303[i] !== pattern303[i]) { hasPending = true; return; }
+    if (pendingPattern303[i] !== pattern303[i]) { hasPendingNotes = true; rollupHasPending(); return; }
   }
   for (let i = 0; i < patternLead.length; i++) {
-    if (pendingPatternLead[i] !== patternLead[i]) { hasPending = true; return; }
+    if (pendingPatternLead[i] !== patternLead[i]) { hasPendingNotes = true; rollupHasPending(); return; }
   }
+  hasPendingNotes = false; rollupHasPending();
+}
+function recomputeHasPendingTracks() {
   for (let v = 0; v < N_VOICES; v++) {
     if (pendingMuted[v] !== muted[v] || pendingSoloed[v] !== soloed[v]) {
-      hasPending = true; return;
+      hasPendingTracks = true; rollupHasPending(); return;
     }
   }
+  hasPendingTracks = false; rollupHasPending();
+}
+function recomputeHasPendingFx() {
   for (const name of FX_NAMES) {
-    if (pendingFx[name] !== liveFx[name]) { hasPending = true; return; }
+    if (pendingFx[name] !== liveFx[name]) { hasPendingFx = true; rollupHasPending(); return; }
   }
-  hasPending = false;
+  hasPendingFx = false; rollupHasPending();
+}
+// Full rescan — keep for the rare callers that touched everything (e.g. clear).
+function recomputeHasPending() {
+  recomputeHasPendingNotes();
+  recomputeHasPendingTracks();
+  recomputeHasPendingFx();
 }
 
 function isAudible(v) {
@@ -2575,7 +2593,15 @@ function scheduleStep(step, time) {
 }
 
 function scheduler() {
-  while (nextNoteTime < ctx.currentTime + SCHEDULE_AHEAD) {
+  const now = ctx.currentTime;
+  // Defense in depth: if a stall (background throttling, CPU pause) leaves us
+  // far behind, skip silently to "now" rather than burst-scheduling at past
+  // timestamps. The visibilitychange handler covers the common case.
+  if (nextNoteTime < now - 0.5) {
+    nextNoteTime = now + 0.05;
+    visualQueue.length = 0;
+  }
+  while (nextNoteTime < now + SCHEDULE_AHEAD) {
     // Commit pending edits per category whose snap mode matches the step
     // boundary we're about to schedule. 'off' never queues; only loop /
     // half / quarter contribute pending state.
@@ -2601,6 +2627,7 @@ function play() {
   nextNoteTime = ctx.currentTime + 0.05;
   schedTimer = setInterval(scheduler, LOOKAHEAD_MS);
   document.getElementById('playBtn').classList.add('active');
+  kickRenderLoop();
 }
 
 // Tempo +/- long-press: one immediate step on press, then after a short
@@ -2705,10 +2732,6 @@ function buildUI() {
   }
   // grid: 7 rows × (label + 16 cells)
   for (let v = 0; v < N_VOICES; v++) {
-    const row = document.createElement('div');
-    row.className = 'row';
-    row.dataset.row = v;
-
     // label cell
     const lab = document.createElement('div');
     lab.className = 'row-label';
@@ -2750,7 +2773,7 @@ function buildUI() {
     }
     renderCell(v, s);
     if (res.partnerCleared >= 0) renderCell(res.partnerCleared, s);
-    recomputeHasPending();
+    recomputeHasPendingNotes();
   };
   grid.addEventListener('touchstart', onCellTap, { passive: false });
   grid.addEventListener('mousedown', onCellTap);
@@ -2769,7 +2792,7 @@ function buildUI() {
     }
     refreshMSButtons(v);
     if (options.snapTracks === 'off') applyRowDim();
-    recomputeHasPending();
+    recomputeHasPendingTracks();
   });
 }
 
@@ -2817,7 +2840,7 @@ function buildGrid303() {
     }
     renderCell303(r, s);
     for (const cr of res.cleared) renderCell303(cr, s);
-    recomputeHasPending();
+    recomputeHasPendingNotes();
   };
   g303.addEventListener('touchstart', onTap, { passive: false });
   g303.addEventListener('mousedown', onTap);
@@ -2878,7 +2901,7 @@ function buildGridLead() {
     }
     renderCellLead(r, s);
     for (const cr of res.cleared) renderCellLead(cr, s);
-    recomputeHasPending();
+    recomputeHasPendingNotes();
   };
   gLead.addEventListener('touchstart', onTap, { passive: false });
   gLead.addEventListener('mousedown', onTap);
@@ -2951,7 +2974,7 @@ function commitNotesOnly() {
     for (let r = 0; r < N_ROWS_LEAD; r++)
       for (let s = 0; s < N_STEPS; s++) renderCellLead(r, s);
   }
-  recomputeHasPending();
+  recomputeHasPendingNotes();
 }
 
 function commitTracksOnly() {
@@ -2964,7 +2987,7 @@ function commitTracksOnly() {
       changed = true;
     }
   }
-  if (changed) { applyRowDim(); recomputeHasPending(); }
+  if (changed) { applyRowDim(); recomputeHasPendingTracks(); }
 }
 
 function commitFxOnly() {
@@ -2977,7 +3000,7 @@ function commitFxOnly() {
     }
     pendingFxMode[name] = null;
   }
-  if (changed) { updateAllFxPendingMarkers(); recomputeHasPending(); }
+  if (changed) { updateAllFxPendingMarkers(); recomputeHasPendingFx(); }
 }
 
 // Step-driven partial FX commit: each pending effect is committed only when
@@ -2997,7 +3020,7 @@ function maybeCommitFxAtStep(currentStep) {
     }
     pendingFxMode[name] = null;
   }
-  if (changed) { updateAllFxPendingMarkers(); recomputeHasPending(); }
+  if (changed) { updateAllFxPendingMarkers(); recomputeHasPendingFx(); }
 }
 
 function commitPending() {
@@ -3028,24 +3051,29 @@ function clearAllNotes() {
   for (let r = 0; r < N_ROWS_LEAD; r++) {
     for (let s = 0; s < N_STEPS; s++) renderCellLead(r, s);
   }
-  recomputeHasPending();
+  recomputeHasPendingNotes();
 }
+
+// Dim is applied by rewriting one stylesheet rule that targets all muted-row
+// cells by their data-v attribute. One DOM write per mute/solo toggle instead
+// of one per cell.
+const dimStyle = document.createElement('style');
+document.head.appendChild(dimStyle);
 
 function applyRowDim() {
   const anySolo = soloed.some(Boolean);
+  const dimVoices = [];
   for (let v = 0; v < N_VOICES; v++) {
     const audible = anySolo ? (soloed[v] && !muted[v]) : !muted[v];
-    const dim = !audible;
-    for (let s = 0; s < N_STEPS; s++) {
-      cells[v][s].classList.toggle('row-dim', dim);
-    }
+    if (!audible) dimVoices.push(v);
   }
+  if (!dimVoices.length) {
+    dimStyle.textContent = '';
+    return;
+  }
+  const sel = dimVoices.map(v => `#grid .cell[data-v="${v}"]`).join(',');
+  dimStyle.textContent = `${sel} { opacity: .35; filter: grayscale(.5) brightness(.8); }`;
 }
-
-// Add a per-cell dim style since `.row` uses display:contents
-const dimStyle = document.createElement('style');
-dimStyle.textContent = `.cell.row-dim { opacity: .35; filter: grayscale(.5) brightness(.8); }`;
-document.head.appendChild(dimStyle);
 
 /* ---------- transport / bpm ---------- */
 
@@ -3161,7 +3189,7 @@ function onFxInput(name, sliderValue) {
     pendingFxMode[name] = options.snapEffects;
   }
   updateFxPendingMarker(name);
-  recomputeHasPending();
+  recomputeHasPendingFx();
 }
 
 function resetFx(name) {
@@ -3180,7 +3208,7 @@ function resetFx(name) {
     pendingFxMode[name] = options.snapEffectsReset;
   }
   updateFxPendingMarker(name);
-  recomputeHasPending();
+  recomputeHasPendingFx();
 }
 
 function bindFX() {
@@ -3209,9 +3237,18 @@ function bindFX() {
 /* ---------- step LED render loop ---------- */
 
 let lastColStep = -1;   // last column highlighted by the .cur ring
+let rafScheduled = false;
+
+function kickRenderLoop() {
+  if (rafScheduled) return;
+  rafScheduled = true;
+  requestAnimationFrame(renderLoop);
+}
 
 function renderLoop() {
-  if (ctx && isPlaying) {
+  rafScheduled = false;
+  if (!ctx || !isPlaying) return;  // exit; play() will re-kick
+  {
     const now = ctx.currentTime;
     let ledStep = -1;
     while (visualQueue.length > 0 && visualQueue[0].time <= now) {
@@ -3256,6 +3293,7 @@ function renderLoop() {
       lastColStep = colStep;
     }
   }
+  rafScheduled = true;
   requestAnimationFrame(renderLoop);
 }
 
@@ -3278,8 +3316,20 @@ function bindBoot(applyFX) {
 /* ---------- visibility / iOS resume ---------- */
 
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && ctx && ctx.state === 'suspended') {
-    ctx.resume().catch(()=>{});
+  if (document.hidden || !ctx) return;
+  if (ctx.state === 'suspended') ctx.resume().catch(()=>{});
+  // setInterval is throttled while hidden but ctx.currentTime keeps advancing.
+  // On return, resync the scheduler and silence any hanging phrase so we don't
+  // burst-fire dozens of past-timestamp steps and ring out a stuck note.
+  if (isPlaying) {
+    const now = ctx.currentTime;
+    if (nextNoteTime < now - 0.05) {
+      nextNoteTime = now + 0.05;
+      visualQueue.length = 0;
+      if (live303) release303(now, 0.01);
+      if (liveLead && liveLead.isOn) leadRelease(now);
+      lastColStep = -1;
+    }
   }
 });
 
@@ -3684,7 +3734,8 @@ bindBoot(applyFX);
 initOptions();
 bindAckFeedback();
 setBPM(120);
-requestAnimationFrame(renderLoop);
+// renderLoop is kicked on play() and self-terminates on stop, so we don't
+// start a permanent rAF here — keeps the boot screen at 0 idle wakeups.
 
 // Default: kick four-on-the-floor only. Users add the rest.
 (function defaultPattern() {
