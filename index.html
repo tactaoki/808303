@@ -1070,6 +1070,18 @@ input.display:focus {
         <button class="btn ctrl" data-bass-wave="sawtooth">Sawtooth</button>
         <button class="btn ctrl" data-bass-wave="square">Square</button>
       </div>
+
+      <div class="opt-label" style="margin-top:8px">BASS · FILTER</div>
+      <div class="slider opt-slider">
+        <div class="lbl">Cutoff</div>
+        <input type="range" min="0" max="1000" value="500" id="optBassCutoff">
+        <div class="lbl rt" id="optBassCutoffVal">100%</div>
+      </div>
+      <div class="slider opt-slider" style="margin-top:4px">
+        <div class="lbl">Reso</div>
+        <input type="range" min="0" max="1000" value="500" id="optBassReso">
+        <div class="lbl rt" id="optBassResoVal">100%</div>
+      </div>
     </section>
 
     <section class="opt-section">
@@ -1869,6 +1881,8 @@ const DEFAULTS = {
   mode: 'minor',
   // Bass synth (303 view) — wave is per-voice.
   bassWave: 'sawtooth',     // sawtooth is the iconic 303 voice
+  bassCutoff:    1.0,       // multiplier on the env peak (1.0 = stock 303 sweep)
+  bassResonance: 1.0,       // multiplier on filter resonance (1.0 = stock squelch)
   // Lead synth (LEAD view).
   leadWave:       'sawtooth',
   leadOctave:     0,                      // -2..+2 octaves on main osc only
@@ -2081,13 +2095,17 @@ function findActiveRowLead(step) {
    self-oscillates audibly at the resonance values we use). Fallback is
    two cascaded BiquadFilter LPs sharing the same cutoff envelope. */
 function build303Filter(ctx, isAccent) {
+  // options.bassResonance is a multiplier on the stock voicing. 1.0 reproduces
+  // the iconic 0.75 / 0.95 (accent) characters; pushing higher gets closer to
+  // the worklet's k=4 self-osc edge (clamped to stay below it).
+  const resoMult = options.bassResonance;
   if (workletReady) {
     const f = new AudioWorkletNode(ctx, 'ladder', {
       numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
     });
-    // Resonance: 0.75 / 0.95 stay below the worklet's k=4 self-osc edge,
-    // squelchy but never a continuous pitched tone. Drive adds 303 grit.
-    f.parameters.get('resonance').setValueAtTime(isAccent ? 0.95 : 0.75, ctx.currentTime);
+    const baseReso = isAccent ? 0.95 : 0.75;
+    const reso = Math.max(0, Math.min(1.15, baseReso * resoMult));
+    f.parameters.get('resonance').setValueAtTime(reso, ctx.currentTime);
     f.parameters.get('drive').setValueAtTime(0.30, ctx.currentTime);
     return { node: f, tail: null, cutoffParam: f.parameters.get('cutoff') };
   }
@@ -2096,7 +2114,7 @@ function build303Filter(ctx, isAccent) {
   // automation to both stages.
   const a = ctx.createBiquadFilter(); a.type = 'lowpass';
   const b = ctx.createBiquadFilter(); b.type = 'lowpass';
-  a.Q.value = isAccent ? 8 : 5;
+  a.Q.value = Math.max(0.3, Math.min(16, (isAccent ? 8 : 5) * resoMult));
   b.Q.value = 0.707;
   a.connect(b);
   const proxy = {
@@ -2117,7 +2135,10 @@ function build303Filter(ctx, isAccent) {
    could be heard. With a higher floor the sustained portion of a tied
    phrase stays audible and pitch movement reads clearly. */
 function fireFilterEnv(cutoffParam, time, isAccent) {
-  const peak  = isAccent ? 6500 : 3000;
+  // options.bassCutoff scales the env peak only — the floor stays at 350 Hz so
+  // the sub bass never drops out, matching what the real 303 cutoff knob does.
+  const peakBase = isAccent ? 6500 : 3000;
+  const peak  = Math.max(400, Math.min(20000, peakBase * options.bassCutoff));
   const floor = 350;
   const atk   = isAccent ? 0.006 : 0.008;
   const decay = isAccent ? 0.300 : 0.500;
@@ -2303,6 +2324,13 @@ const CUTOFF_MIN = 80, CUTOFF_MAX = 12000;
 const CUTOFF_RATIO = CUTOFF_MAX / CUTOFF_MIN;
 const sliderToCutoffHz = v => CUTOFF_MIN * Math.pow(CUTOFF_RATIO, v / 1000);
 const cutoffHzToSlider = hz => Math.round(Math.log(hz / CUTOFF_MIN) / Math.log(CUTOFF_RATIO) * 1000);
+// Bass filter multipliers: log-scaled so the slider center (500) is exactly
+// 1.0 × stock. Cutoff sweeps 33..300 %, resonance 50..200 % of baseline.
+const sliderToBassCutoffMult = v => Math.pow(3, (v - 500) / 500);
+const bassCutoffMultToSlider = m => Math.round(500 + Math.log(m) / Math.log(3) * 500);
+const sliderToBassResoMult   = v => Math.pow(2, (v - 500) / 500);
+const bassResoMultToSlider   = m => Math.round(500 + Math.log(m) / Math.log(2) * 500);
+const fmtMultPct = m => Math.round(m * 100) + '%';
 const sliderToReso     = v  => 0.5 + (v / 1000) * 79.5;   // 0.5 .. 80 — top end rings into self-osc
 const resoToSlider     = q  => Math.round((q - 0.5) / 79.5 * 1000);
 const sliderToEnvAmt   = v  => (v - 500) / 500;
@@ -3426,6 +3454,12 @@ function refreshKeyUI() {
   document.querySelectorAll('[data-bass-wave]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.bassWave === options.bassWave);
   });
+  const setSlider = (id, pos, label) => {
+    const el = document.getElementById(id); if (el) el.value = pos;
+    const lb = document.getElementById(id + 'Val'); if (lb) lb.textContent = label;
+  };
+  setSlider('optBassCutoff', bassCutoffMultToSlider(options.bassCutoff),    fmtMultPct(options.bassCutoff));
+  setSlider('optBassReso',   bassResoMultToSlider(options.bassResonance),   fmtMultPct(options.bassResonance));
 }
 function refreshFillRateUI() {
   document.querySelectorAll('[data-fill-rate]').forEach(btn => {
@@ -3553,6 +3587,21 @@ function initOptions() {
       refreshOptionsUI();
     });
   });
+  // Bass filter sliders — new values apply at the next phrase boundary
+  // (filters are built fresh per phrase, so live mid-phrase changes would
+  // require a heavier rewire that risks audible discontinuity).
+  const bindBassMultSlider = (id, sliderToMult, optKey) => {
+    const el = document.getElementById(id);
+    const lb = document.getElementById(id + 'Val');
+    if (!el) return;
+    el.addEventListener('input', () => {
+      const m = sliderToMult(parseInt(el.value, 10));
+      options[optKey] = m;
+      if (lb) lb.textContent = fmtMultPct(m);
+    });
+  };
+  bindBassMultSlider('optBassCutoff', sliderToBassCutoffMult, 'bassCutoff');
+  bindBassMultSlider('optBassReso',   sliderToBassResoMult,   'bassResonance');
 
   // LEAD synth — all monosynth-specific controls live here. Key / Scale are
   // pulled from the global section above (shared with the 303).
