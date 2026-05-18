@@ -1357,7 +1357,7 @@ function makeBassChannel(ctx, dest) {
 
 function makeLeadChannel(ctx, dest) {
   const input = ctx.createGain();
-  input.gain.value = 0.28;
+  input.gain.value = 0.20;
   input.connect(dest);
   return input;
 }
