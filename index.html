@@ -1111,7 +1111,7 @@ input.display:focus {
       </div>
       <div class="slider opt-slider" style="margin-top:4px">
         <div class="lbl">Reso</div>
-        <input type="range" min="0" max="1000" value="304" id="optLeadReso">
+        <input type="range" min="0" max="1000" value="44" id="optLeadReso">
         <div class="lbl rt" id="optLeadResoVal">4.0</div>
       </div>
       <div class="slider opt-slider" style="margin-top:4px">
@@ -1337,7 +1337,7 @@ function makeBassChannel(ctx, dest) {
 
 function makeLeadChannel(ctx, dest) {
   const input = ctx.createGain();
-  input.gain.value = 0.50;
+  input.gain.value = 0.28;
   input.connect(dest);
   return input;
 }
@@ -2277,8 +2277,8 @@ const CUTOFF_MIN = 80, CUTOFF_MAX = 12000;
 const CUTOFF_RATIO = CUTOFF_MAX / CUTOFF_MIN;
 const sliderToCutoffHz = v => CUTOFF_MIN * Math.pow(CUTOFF_RATIO, v / 1000);
 const cutoffHzToSlider = hz => Math.round(Math.log(hz / CUTOFF_MIN) / Math.log(CUTOFF_RATIO) * 1000);
-const sliderToReso     = v  => 0.5 + (v / 1000) * 11.5;
-const resoToSlider     = q  => Math.round((q - 0.5) / 11.5 * 1000);
+const sliderToReso     = v  => 0.5 + (v / 1000) * 79.5;   // 0.5 .. 80 — top end rings into self-osc
+const resoToSlider     = q  => Math.round((q - 0.5) / 79.5 * 1000);
 const sliderToEnvAmt   = v  => (v - 500) / 500;
 const envAmtToSlider   = a  => Math.round(a * 500 + 500);
 const sliderToAttack   = v  => 0.001 + (v / 1000) * 0.199;
