@@ -129,6 +129,11 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
   box-shadow: inset 0 -2px 0 var(--accent-red-d);
   flex: 0 0 auto;
   min-width: 64px;
+  cursor: pointer;
+}
+.brand.muted .model {
+  opacity: .35;
+  text-decoration: line-through;
 }
 .brand .model {
   font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
@@ -2555,14 +2560,16 @@ function scheduleStep(step, time) {
   const fillStride = fillActive ? Math.max(1, Math.round(16 / options.fillRate)) : 1;
   const shouldTrigger = !fillActive || (step % fillStride === 0);
   if (shouldTrigger) {
-    for (let v = 0; v < N_VOICES; v++) {
-      const state = pattern[pIdx(v, sourceStep)];
-      if (state === 0) continue;
-      if (!isAudible(v)) continue;
-      voices[v](time, state === 2);
+    if (!machineMuted['808']) {
+      for (let v = 0; v < N_VOICES; v++) {
+        const state = pattern[pIdx(v, sourceStep)];
+        if (state === 0) continue;
+        if (!isAudible(v)) continue;
+        voices[v](time, state === 2);
+      }
     }
-    schedule303(sourceStep, step, time);
-    scheduleLead(sourceStep, step, time);
+    if (!machineMuted['303'])  schedule303(sourceStep, step, time);
+    if (!machineMuted['lead']) scheduleLead(sourceStep, step, time);
   }
   visualQueue.push({ step, time });
 }
@@ -3081,12 +3088,32 @@ function bindTransport() {
   // yet, so this only flips the label for now; real view switching lands
   // when the Bass screen is implemented.
   document.getElementById('pageToggle').addEventListener('click', switchMachine);
+  // Brand badge: tap to mute / unmute the currently shown machine.
+  document.querySelector('.brand').addEventListener('click', () => toggleMachineMute(currentMachine));
 }
 
 const MACHINE_ORDER = ['808', '303', 'lead'];
 const MACHINE_BRAND = { '808': '808', '303': '303', 'lead': '020' };
 const MACHINE_LABEL = { '808': '808',    '303': '303',  'lead': '020' };
+const machineMuted  = { '808': false,  '303': false,   'lead': false };
 let currentMachine = '808';
+
+function refreshBrandMute() {
+  document.querySelector('.brand').classList.toggle('muted', machineMuted[currentMachine]);
+}
+
+function toggleMachineMute(machine) {
+  machineMuted[machine] = !machineMuted[machine];
+  if (machineMuted[machine] && ctx) {
+    // Cut any sustaining voices on this machine right away — the scheduler
+    // will skip future triggers, but a held phrase would otherwise ring.
+    const now = ctx.currentTime;
+    if (machine === '303' && live303) release303(now, 0.01);
+    if (machine === 'lead' && liveLead && liveLead.isOn) leadRelease(now);
+  }
+  refreshBrandMute();
+}
+
 function switchMachine() {
   const idx = MACHINE_ORDER.indexOf(currentMachine);
   currentMachine = MACHINE_ORDER[(idx + 1) % MACHINE_ORDER.length];
@@ -3099,6 +3126,7 @@ function switchMachine() {
   // Button label always shows the *destination* machine.
   const next = MACHINE_ORDER[(MACHINE_ORDER.indexOf(currentMachine) + 1) % MACHINE_ORDER.length];
   document.getElementById('pageToggle').textContent = MACHINE_LABEL[next];
+  refreshBrandMute();
 }
 
 /* ---------- FX sliders ---------- */
@@ -3614,7 +3642,7 @@ function initOptions() {
 
 const ACK_SELECTOR =
   '.btn, .cell, .row-label .ms button, .page-btn, .fill-btn, ' +
-  '.fx-reset, input[type=range], input.display';
+  '.fx-reset, input[type=range], input.display, .brand';
 
 function ackTap(el) {
   // Alternate between two identical animation classes. Swapping the class
