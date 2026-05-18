@@ -124,17 +124,19 @@ button { font-family: inherit; font-weight: inherit; color: inherit; }
   background: var(--accent-red);
   color: var(--accent-white);
   padding: 0 10px;
-  display: flex; align-items: center;
+  display: flex; align-items: center; justify-content: center;
   border-right: 1px solid var(--ink);
   box-shadow: inset 0 -2px 0 var(--accent-red-d);
   flex: 0 0 auto;
+  min-width: 64px;
 }
 .brand .model {
-  font-size: clamp(11px, 1.5vw, 14px);
-  letter-spacing: .04em;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: clamp(12px, 1.6vw, 15px);
+  letter-spacing: .12em;
   font-weight: 900;
   line-height: 1;
-  font-style: italic;
+  font-style: normal;
 }
 
 .transport {
@@ -912,7 +914,7 @@ input.display:focus {
 }
 .panel[data-machine="lead"] .pitch-tag {
   background: #08080a;
-  color: #ec3a2a;             /* MS-20 red, matches the brand */
+  color: #f0c33a;             /* warm yellow, MS-20 panel-print color */
   border: 1px solid #2a2a2e;
 }
 /* MS-20 style cells: matte black grid with subtle banding, amber LED on */
@@ -973,7 +975,7 @@ input.display:focus {
     <!-- Header -->
     <header class="header">
       <div class="brand">
-        <span class="model">Rhythm</span>
+        <span class="model">808</span>
       </div>
       <div class="transport">
         <button class="btn play" id="playBtn">PLAY</button>
@@ -3062,7 +3064,7 @@ function bindTransport() {
 }
 
 const MACHINE_ORDER = ['808', '303', 'lead'];
-const MACHINE_BRAND = { '808': 'Rhythm', '303': 'Bass', 'lead': 'Lead' };
+const MACHINE_BRAND = { '808': '808', '303': '303', 'lead': '020' };
 const MACHINE_LABEL = { '808': '808',    '303': '303',  'lead': '020' };
 let currentMachine = '808';
 function switchMachine() {
