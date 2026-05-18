@@ -685,18 +685,6 @@ input.display:focus {
   border-color: #e8e8ea;
   font-weight: 600;
 }
-.opt-status {
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  color: #c8c8d0;
-  background: #0e0e10;
-  padding: 4px 10px;
-  display: inline-block;
-  border-radius: 4px;
-  margin-top: 4px;
-  font-size: 12px;
-  border: 1px solid #2a2a30;
-  letter-spacing: .05em;
-}
 .opt-hint {
   font-size: 11px; color: #6c6c72; margin-top: 6px;
   letter-spacing: .02em; font-weight: 400;
@@ -1049,7 +1037,6 @@ input.display:focus {
       <div class="opt-label">DELAY TIME</div>
       <div class="opt-row" id="delayDenomRow"></div>
       <div class="opt-row" id="delayDottedRow"></div>
-      <div class="opt-status">Active: <span id="delayActiveLbl">1/8.</span></div>
     </section>
 
     <section class="opt-section">
@@ -3422,8 +3409,6 @@ function refreshDelayUI() {
     btn.classList.toggle('active',
       d === options.delayDenom && dot === options.delayDotted);
   });
-  const spec = DELAY_SPEC.find(s => s.denom === options.delayDenom && s.dotted === options.delayDotted);
-  document.getElementById('delayActiveLbl').textContent = spec ? spec.label : '?';
 }
 function refreshSnapUI() {
   document.querySelectorAll('.snap-pill').forEach(btn => {
