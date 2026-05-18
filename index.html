@@ -1083,6 +1083,15 @@ input.display:focus {
         <button class="btn ctrl" data-lead-wave="sawtooth">Saw</button>
       </div>
 
+      <div class="opt-label" style="margin-top:8px">LEAD · OCTAVE (Main)</div>
+      <div class="opt-row">
+        <button class="btn ctrl" data-lead-oct="-2">-2</button>
+        <button class="btn ctrl" data-lead-oct="-1">-1</button>
+        <button class="btn ctrl" data-lead-oct="0">0</button>
+        <button class="btn ctrl" data-lead-oct="1">+1</button>
+        <button class="btn ctrl" data-lead-oct="2">+2</button>
+      </div>
+
       <div class="opt-label" style="margin-top:8px">LEAD · SUB INTERVAL</div>
       <div class="opt-row" id="leadSubRow"></div>
 
@@ -1861,6 +1870,7 @@ const DEFAULTS = {
   bassWave: 'sawtooth',     // sawtooth is the iconic 303 voice
   // Lead synth (LEAD view).
   leadWave:       'sawtooth',
+  leadOctave:     0,                      // -2..+2 octaves on main osc only
   leadMainLevel:  0.80,
   leadSub:        'off',                  // off | -1oct | -5th | unison | +5th | +1oct
   leadSubWave:    'square',
@@ -2312,6 +2322,7 @@ function ensureLeadVoice() {
   const oscMain = ctx.createOscillator();
   oscMain.type = options.leadWave;
   oscMain.frequency.value = 220;
+  oscMain.detune.value = options.leadOctave * 1200;   // octave shift in cents
   const mainGain = ctx.createGain();
   mainGain.gain.value = options.leadMainLevel;
   oscMain.connect(mainGain);
@@ -2397,6 +2408,9 @@ function ensureLeadVoice() {
 function leadApplyPatch() {
   const v = liveLead; if (!v) return;
   v.oscMain.type = options.leadWave;
+  // Octave shift on main only. LFO pitch mod is wired into the same detune
+  // param additively, so the LFO still rides on top of this offset.
+  v.oscMain.detune.setValueAtTime(options.leadOctave * 1200, ctx.currentTime);
   v.mainGain.gain.value = options.leadMainLevel;
   v.oscSub.type = options.leadSubWave;
   v.subGain.gain.value = (options.leadSub === 'off') ? 0 : options.leadSubLevel;
@@ -3353,6 +3367,9 @@ function refreshLeadUI() {
   document.querySelectorAll('[data-lead-wave]').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.leadWave === options.leadWave);
   });
+  document.querySelectorAll('[data-lead-oct]').forEach(btn => {
+    btn.classList.toggle('active', parseInt(btn.dataset.leadOct, 10) === options.leadOctave);
+  });
   document.querySelectorAll('#leadSubRow .btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.leadSub === options.leadSub);
   });
@@ -3473,6 +3490,14 @@ function initOptions() {
   document.querySelectorAll('[data-lead-wave]').forEach(btn => {
     btn.addEventListener('click', () => {
       options.leadWave = btn.dataset.leadWave;
+      leadApplyPatch();
+      refreshOptionsUI();
+    });
+  });
+
+  document.querySelectorAll('[data-lead-oct]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      options.leadOctave = parseInt(btn.dataset.leadOct, 10);
       leadApplyPatch();
       refreshOptionsUI();
     });
