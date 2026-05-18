@@ -948,6 +948,12 @@ input.display:focus {
 .panel[data-machine="lead"] .display {
   background: #08080a;
 }
+/* The cream transport / FX-reset buttons stay light across all machines,
+   so force dark text on the LEAD theme where --ink is white. */
+.panel[data-machine="lead"] .btn,
+.panel[data-machine="lead"] .fx-reset {
+  color: #1a1a1a;
+}
 
 /* LEAD grid placeholder — populated in a later commit. Mirrors the 303
    layout so the empty panel stays visually balanced. */
