@@ -1438,7 +1438,7 @@ function buildMasterBus(ctx) {
   // saturation
   let sat;
   if (workletReady) {
-    sat = new AudioWorkletNode(ctx, 'sat', { numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2] });
+    sat = new AudioWorkletNode(ctx, 'sat', { numberOfInputs:1, numberOfOutputs:1 });
   } else {
     sat = ctx.createWaveShaper();
     sat.curve = makeTanhCurve(0);
@@ -1448,7 +1448,7 @@ function buildMasterBus(ctx) {
   // 4-pole ladder filter
   let filter;
   if (workletReady) {
-    filter = new AudioWorkletNode(ctx, 'ladder', { numberOfInputs:1, numberOfOutputs:1, outputChannelCount:[2] });
+    filter = new AudioWorkletNode(ctx, 'ladder', { numberOfInputs:1, numberOfOutputs:1 });
   } else {
     // fallback: 2 biquads in series + waveshaper
     const b1 = ctx.createBiquadFilter(); b1.type='lowpass'; b1.frequency.value=20000; b1.Q.value=0.5;
@@ -2110,8 +2110,12 @@ function build303Filter(ctx, isAccent) {
   // the worklet's k=4 self-osc edge (clamped to stay below it).
   const resoMult = options.bassResonance;
   if (workletReady) {
+    // No outputChannelCount: omitting it lets the output channel count track
+    // the input dynamically. With outputChannelCount:[2] and a mono source,
+    // the worklet would only write to L and leave R silent — the cause of
+    // the "bass on left" bias we saw.
     const f = new AudioWorkletNode(ctx, 'ladder', {
-      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+      numberOfInputs: 1, numberOfOutputs: 1,
     });
     const baseReso = isAccent ? 0.95 : 0.75;
     const reso = Math.max(0, Math.min(1.15, baseReso * resoMult));
